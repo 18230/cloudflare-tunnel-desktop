@@ -16,3 +16,8 @@ func configureBackgroundCommand(cmd *exec.Cmd) {
 		CreationFlags: windowsCreateNoWindow,
 	}
 }
+
+// stopManagedProcess 在 Windows 上直接结束 cloudflared 子进程，避免 SIGTERM 返回 not supported by windows。
+func stopManagedProcess(cmd *exec.Cmd) error {
+	return cmd.Process.Kill()
+}

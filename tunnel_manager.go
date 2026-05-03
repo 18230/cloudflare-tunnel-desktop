@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -158,7 +157,7 @@ func (m *TunnelManager) Stop() error {
 	m.mu.Unlock()
 
 	m.addLog("info", "cloudflared", "正在停止 cloudflared", "process")
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := stopManagedProcess(cmd); err != nil {
 		return fmt.Errorf("发送停止信号失败: %w", err)
 	}
 	go m.killIfStillRunning(cmd, 5*time.Second)
