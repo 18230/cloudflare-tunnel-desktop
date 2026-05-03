@@ -1,16 +1,17 @@
 # Cloudflare Tunnel Desktop
 
-一个基于 Go + Wails + React/TypeScript 的桌面工具，用图形界面管理单个 Cloudflare Tunnel 下的多个 HTTP/HTTPS 域名映射。
+一个基于 Go + Wails + React/TypeScript 的桌面工具，用图形界面管理 Cloudflare Tunnel 和 HTTP/HTTPS 域名映射。
 
 当前适配 macOS 和 Windows，GitHub Actions 已支持自动构建和发布 macOS arm64 `dmg` 与 Windows amd64 `exe`。macOS 顶部菜单栏和 Windows 通知区均支持关闭窗口后常驻，并可从托盘重新唤起或彻底退出。
 
 ## 当前能力
 
-- 手动配置 Account ID、Zone ID、根域名、Tunnel ID/名称。
-- API Token 和 Tunnel Token 按自用场景明文保存到本地配置文件，界面可查看和复制。
-- 创建远程管理 Tunnel，获取 Tunnel Token。
-- 管理 `hostname -> http(s)://host:port` 映射。
-- 同步 Cloudflare Tunnel ingress 配置和 CNAME DNS 记录。
+- 页面分为基础配置、Tunnel 管理、域名映射、日志四个工作区。
+- 手动配置 Account ID、Zone ID、根域名、认证方式和运行参数。
+- API Token 或 Global API Key 按自用场景明文保存到本地配置文件，界面可查看和复制。
+- 创建、刷新、删除 Cloudflare Tunnel，并可将指定 Tunnel 设为当前管理对象。
+- 自动从 Cloudflare 获取当前 Tunnel 的 Tunnel Token；界面只读展示，不提供手工修改入口。
+- 管理当前 Tunnel 的 `hostname -> http(s)://host:port` 映射，新增、编辑、删除后自动同步 Cloudflare Tunnel ingress 配置和 CNAME DNS 记录。
 - 启动、停止、重启 `cloudflared`，支持 `auto`、`quic`、`http2` 传输协议。
 - 自动检测和安装 `cloudflared`：macOS 使用 Homebrew，Windows 优先使用 `winget`，并回退到 `scoop` 或 Chocolatey。
 - 监听 cloudflared 日志，标记 1033、连接、DNS、鉴权相关事件。
@@ -25,7 +26,7 @@
 
 应用也支持 Global API Key。使用 Global API Key 时必须同时填写 Cloudflare 账号邮箱，应用会改用 `X-Auth-Email` 和 `X-Auth-Key` 请求头；如果把 Global API Key 当作 API Token 使用，会得到 `9109 Invalid access token`。
 
-应用会把认证凭据和 Tunnel Token 明文写入配置文件。macOS 通常是：
+应用会把认证凭据明文写入配置文件，并缓存当前 Tunnel 的运行 token。macOS 通常是：
 
 ```text
 ~/Library/Application Support/CloudflareTunnelDesktop/config.json
@@ -77,7 +78,7 @@ cloudflared --version
 open build/bin/cloudflare-tunnel-desktop.app
 ```
 
-应用启动后会在 macOS 顶部菜单栏或 Windows 通知区显示常驻入口。关闭主窗口只会隐藏窗口，后台进程仍会保留；需要完全退出时，在托盘菜单里选择 `彻底退出`。
+应用启动后会在 macOS 顶部菜单栏显示 `CF` 常驻入口，Windows 会在通知区显示托盘入口。关闭主窗口只会隐藏窗口，后台进程仍会保留；需要完全退出时，在菜单里选择 `彻底退出`。
 
 ## 换电脑安装
 
@@ -124,6 +125,7 @@ hdiutil create \
   -volname "Cloudflare Tunnel Desktop" \
   -srcfolder build/bin/cloudflare-tunnel-desktop.app \
   -ov \
+  -fs HFS+ \
   -format UDZO \
   dist/cloudflare-tunnel-desktop-macos-arm64.dmg
 hdiutil verify dist/cloudflare-tunnel-desktop-macos-arm64.dmg
@@ -150,7 +152,7 @@ Windows exe 的真实运行校验需要在 Windows 实机、虚拟机或 GitHub 
 最新已验证发布版本是：
 
 ```text
-https://github.com/18230/cloudflare-tunnel-desktop/releases/tag/v1.0.0
+https://github.com/18230/cloudflare-tunnel-desktop/releases/tag/v1.0.1
 ```
 
 如果 macOS codesign 报 `resource fork, Finder information, or similar detritus not allowed`，清理构建产物扩展属性后再验签：

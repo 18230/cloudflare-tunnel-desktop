@@ -231,17 +231,32 @@ func (a *App) ListTunnels() ([]CloudflareTunnel, error) {
 func (a *App) BindTunnel(tunnel CloudflareTunnel) (AppConfig, error) {
 	tunnel.ID = strings.TrimSpace(tunnel.ID)
 	tunnel.Name = strings.TrimSpace(tunnel.Name)
+	tunnel.Token = strings.TrimSpace(tunnel.Token)
 	if !uuidPattern.MatchString(tunnel.ID) {
 		return AppConfig{}, fmt.Errorf("Tunnel ID 必须是 UUID 格式")
 	}
 	a.mu.Lock()
+	config := a.config
+	auth := a.currentCloudflareAuthLocked()
+	a.mu.Unlock()
+
+	token := tunnel.Token
+	if token == "" && cloudflareIDPattern.MatchString(config.AccountID) && strings.TrimSpace(auth.Key) != "" {
+		client := NewCloudflareClientWithAuth(auth)
+		fetchedToken, err := client.GetTunnelToken(context.Background(), config.AccountID, tunnel.ID)
+		if err != nil {
+			a.manager.addLog("warn", "cloudflare", "获取 Tunnel Token 失败，已清空旧 Token: "+err.Error(), "auth")
+		} else {
+			token = fetchedToken
+		}
+	}
+
+	a.mu.Lock()
 	a.config.TunnelID = tunnel.ID
 	a.config.TunnelName = tunnel.Name
-	if tunnel.Token != "" {
-		a.tunnelToken = tunnel.Token
-		a.config.TunnelToken = tunnel.Token
-	}
-	config := a.config
+	a.tunnelToken = token
+	a.config.TunnelToken = token
+	config = a.config
 	a.mu.Unlock()
 	if err := a.store.Save(config); err != nil {
 		return AppConfig{}, err

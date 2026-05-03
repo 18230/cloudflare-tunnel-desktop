@@ -487,6 +487,17 @@ h1 {
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
+.field input[readonly] {
+    color: #64748b;
+    background: #f8fafc;
+    cursor: default;
+}
+
+.field input[readonly]:focus {
+    border-color: #cad4df;
+    box-shadow: none;
+}
+
 .toggle-row {
     grid-column: 1 / -1;
     display: flex;
@@ -526,6 +537,71 @@ h1 {
     grid-column: 1 / -1;
     display: grid;
     gap: 10px;
+}
+
+.tunnel-create-row {
+    max-width: 520px;
+    margin-bottom: 16px;
+}
+
+.tunnel-token-form {
+    margin-top: 18px;
+    max-width: 560px;
+    padding-top: 16px;
+    border-top: 1px solid #e0e7ef;
+}
+
+.table-shell {
+    width: 100%;
+    overflow-x: auto;
+    border: 1px solid #e0e7ef;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.data-table {
+    width: 100%;
+    min-width: 720px;
+    border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid #e0e7ef;
+    text-align: left;
+    vertical-align: middle;
+}
+
+.data-table th {
+    color: #617084;
+    background: #f8fafc;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.data-table tr:last-child td {
+    border-bottom: 0;
+}
+
+.data-table strong {
+    color: #17202b;
+}
+
+.data-table td {
+    color: #2b3644;
+    font-size: 13px;
+}
+
+.mono-cell {
+    color: #68778a;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    word-break: break-all;
+}
+
+.table-empty {
+    color: #778397;
+    text-align: center;
 }
 
 .tunnel-list {

@@ -37,20 +37,15 @@ static void cloudflareSetupTrayOnMainThread(void) {
 		cloudflareTrayDelegate = [[CloudflareTunnelTrayDelegate alloc] init];
 	}
 	if (cloudflareStatusItem == nil) {
-		cloudflareStatusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+		cloudflareStatusItem = [[[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength] retain];
 	}
-	[cloudflareStatusItem setLength:NSSquareStatusItemLength];
+	[cloudflareStatusItem setLength:NSVariableStatusItemLength];
 
 	NSButton *button = [cloudflareStatusItem button];
 	[button setToolTip:@"Cloudflare Tunnel Desktop"];
-	if (@available(macOS 11.0, *)) {
-		NSImage *image = [NSImage imageWithSystemSymbolName:@"cloud.fill" accessibilityDescription:@"Cloudflare Tunnel Desktop"];
-		[image setTemplate:YES];
-		[button setImage:image];
-		[button setImagePosition:NSImageOnly];
-	} else {
-		[button setTitle:@"CF"];
-	}
+	[button setTitle:@"CF"];
+	[button setImage:nil];
+	[button setImagePosition:NSNoImage];
 
 	NSMenu *trayMenu = [[NSMenu alloc] initWithTitle:@"Cloudflare Tunnel Desktop"];
 	NSMenuItem *titleItem = [[NSMenuItem alloc] initWithTitle:@"Cloudflare Tunnel Desktop" action:nil keyEquivalent:@""];

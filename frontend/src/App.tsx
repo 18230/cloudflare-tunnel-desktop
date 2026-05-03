@@ -14,7 +14,6 @@ import {
     Server,
     ShieldCheck,
     Trash2,
-    Wifi,
     Play,
     ExternalLink,
 } from 'lucide-react';
@@ -29,7 +28,6 @@ import {
     GetLogs,
     GetStatus,
     InstallCloudflared,
-    ListAllTunnelRoutes,
     ListTunnels,
     LoadConfig,
     PullRoutesFromCloudflare,
@@ -129,18 +127,6 @@ type CloudflareTunnel = {
     conns_active_at: string;
 };
 
-type TunnelRouteOverview = {
-    tunnelId: string;
-    tunnelName: string;
-    tunnelStatus: string;
-    hostname: string;
-    serviceProtocol: string;
-    serviceHost: string;
-    servicePort: number;
-    enabled: boolean;
-    source: string;
-};
-
 const defaultConfig: AppConfig = {
     accountId: '',
     zoneId: '',
@@ -214,11 +200,10 @@ function App() {
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [availableZones, setAvailableZones] = useState<CloudflareZone[]>([]);
     const [availableTunnels, setAvailableTunnels] = useState<CloudflareTunnel[]>([]);
-    const [allTunnelRoutes, setAllTunnelRoutes] = useState<TunnelRouteOverview[]>([]);
-    const [allRoutesLoaded, setAllRoutesLoaded] = useState(false);
     const [deleteTunnelId, setDeleteTunnelId] = useState('');
     const [deleteTunnelDNS, setDeleteTunnelDNS] = useState(false);
-    const [activePanel, setActivePanel] = useState<'config' | 'routes' | 'overview' | 'logs'>('config');
+    const [selectedRouteTunnelId, setSelectedRouteTunnelId] = useState('');
+    const [activePanel, setActivePanel] = useState<'config' | 'tunnels' | 'routes' | 'logs'>('config');
     const [message, setMessage] = useState('');
     const [busy, setBusy] = useState('');
 
@@ -247,10 +232,10 @@ function App() {
     }, [installStatus.installing]);
 
     useEffect(() => {
-        if (activePanel === 'overview' && !allRoutesLoaded && config.accountId) {
-            void handleListAllTunnelRoutes(false);
+        if ((activePanel === 'tunnels' || activePanel === 'routes') && config.accountId && availableTunnels.length === 0) {
+            void handleListTunnels(false);
         }
-    }, [activePanel, allRoutesLoaded, config.accountId]);
+    }, [activePanel, config.accountId]);
 
     const uptimeText = useMemo(() => formatDuration(status.uptimeSeconds), [status.uptimeSeconds]);
 
@@ -259,6 +244,7 @@ function App() {
             const loaded = await LoadConfig();
             setConfig(loaded);
             setSettings(loaded);
+            setSelectedRouteTunnelId(loaded.tunnelId || '');
             setCredentials({
                 authType: loaded.authType || 'api_token',
                 authEmail: loaded.authEmail || '',
@@ -361,6 +347,9 @@ function App() {
             const updated = await CreateTunnel(saved.tunnelName || config.tunnelName || 'desktop-tunnel');
             setConfig(updated);
             setSettings(updated);
+            setSelectedRouteTunnelId(updated.tunnelId || '');
+            setCredentials((current) => ({...current, tunnelToken: updated.tunnelToken || ''}));
+            setAvailableTunnels(await ListTunnels());
             await refreshLocalState();
             setMessage('Tunnel 已创建或绑定');
         });
@@ -389,7 +378,7 @@ function App() {
         });
     }
 
-    async function handleListTunnels() {
+    async function handleListTunnels(showMessage = true) {
         await withBusy('listTunnels', async () => {
             const saved = await SaveSettings({
                 accountId: settings.accountId,
@@ -406,7 +395,9 @@ function App() {
             setAvailableTunnels(tunnels);
             setDeleteTunnelId('');
             setDeleteTunnelDNS(false);
-            setMessage(tunnels.length > 0 ? `已获取 ${tunnels.length} 个 Tunnel` : '当前账号没有 Tunnel');
+            if (showMessage) {
+                setMessage(tunnels.length > 0 ? `已获取 ${tunnels.length} 个 Tunnel` : '当前账号没有 Tunnel');
+            }
         });
     }
 
@@ -414,13 +405,13 @@ function App() {
         const saved = await BindTunnel(tunnel);
         setConfig(saved);
         setSettings(saved);
-        if (tunnel.token) {
-            setCredentials({...credentials, tunnelToken: tunnel.token});
-        }
+        setSelectedRouteTunnelId(tunnel.id);
+        setCredentials((current) => ({...current, tunnelToken: saved.tunnelToken || ''}));
         const result = await PullRoutesFromCloudflare();
         setConfig(result.config);
         setSettings(result.config);
-        setAllRoutesLoaded(false);
+        setCredentials((current) => ({...current, tunnelToken: result.config.tunnelToken || ''}));
+        setSelectedRouteTunnelId(result.config.tunnelId || tunnel.id);
         setActivePanel('routes');
         await refreshLocalState();
         setMessage(`已设为当前 Tunnel 并读取映射: ${tunnel.name || tunnel.id}`);
@@ -433,7 +424,9 @@ function App() {
             setConfig(saved);
             setSettings(saved);
             setAvailableTunnels((current) => current.filter((item) => item.id !== tunnel.id));
-            setAllRoutesLoaded(false);
+            if (saved.tunnelId !== selectedRouteTunnelId) {
+                setSelectedRouteTunnelId(saved.tunnelId || '');
+            }
             setDeleteTunnelId('');
             setDeleteTunnelDNS(false);
             await refreshLocalState();
@@ -465,6 +458,7 @@ function App() {
     async function handleRouteSubmit(event: FormEvent) {
         event.preventDefault();
         await withBusy('route', async () => {
+            await ensureSelectedRouteTunnel();
             const input = {
                 ...routeForm,
                 servicePort: routeForm.servicePort === '' ? 0 : Number(routeForm.servicePort),
@@ -472,78 +466,71 @@ function App() {
             const saved = routeForm.id ? await UpdateRoute(input) : await AddRoute(input);
             setConfig(saved);
             setSettings(saved);
+            await syncRoutesAfterLocalChange(routeForm.id ? '映射已更新' : '映射已添加');
             setRouteForm(blankRoute);
-            setAllRoutesLoaded(false);
-            setMessage(routeForm.id ? '映射已更新，点击同步 Cloudflare 后生效' : '映射已添加，点击同步 Cloudflare 后生效');
         });
     }
 
     async function handleRemoveRoute(route: Route) {
         await withBusy(`remove-${route.id}`, async () => {
+            await ensureSelectedRouteTunnel();
             const saved = await RemoveRoute(route.id, true);
             setConfig(saved);
             setSettings(saved);
-            setAllRoutesLoaded(false);
-            setMessage('映射已删除，点击同步 Cloudflare 后更新 Tunnel 配置');
+            await syncRoutesAfterLocalChange('映射已删除');
         });
     }
 
-    // handleListAllTunnelRoutes 读取所有 Tunnel 的域名映射总览。
-    async function handleListAllTunnelRoutes(showMessage = true) {
-        await withBusy('allRoutes', async () => {
-            const saved = await SaveSettings({
-                accountId: settings.accountId,
-                zoneId: settings.zoneId,
-                rootDomain: settings.rootDomain,
-                tunnelId: settings.tunnelId,
-                tunnelName: settings.tunnelName,
-                protocol: settings.protocol,
-                autoRestart: settings.autoRestart,
-            });
-            setConfig(saved);
-            setSettings(saved);
-            const result = await ListAllTunnelRoutes();
-            setAllTunnelRoutes(result.routes);
-            setAllRoutesLoaded(true);
-            if (showMessage || result.messages.length > 0) {
-                const prefix = `已读取 ${result.routes.length} 条全账号映射`;
-                setMessage(result.messages.length > 0 ? `${prefix}；${result.messages.join('；')}` : prefix);
-            }
-        });
+    // handleRouteTunnelChange 在映射页切换 Tunnel 时立即载入对应远端映射，避免列表和表单归属不一致。
+    function handleRouteTunnelChange(tunnelId: string) {
+        setSelectedRouteTunnelId(tunnelId);
+        setRouteForm(blankRoute);
+        if (!tunnelId || tunnelId === config.tunnelId) {
+            return;
+        }
+        const targetTunnel = availableTunnels.find((item) => item.id === tunnelId);
+        if (!targetTunnel) {
+            setMessage('请选择有效的 Tunnel');
+            return;
+        }
+        void withBusy(`bindRouteTunnel-${tunnelId}`, () => applyTunnel(targetTunnel));
     }
 
-    // handlePullRoutes 从远端 Tunnel 配置读取已有 public hostname 映射。
-    async function handlePullRoutes() {
-        await withBusy('pullRoutes', async () => {
-            const saved = await SaveSettings({
-                accountId: settings.accountId,
-                zoneId: settings.zoneId,
-                rootDomain: settings.rootDomain,
-                tunnelId: settings.tunnelId,
-                tunnelName: settings.tunnelName,
-                protocol: settings.protocol,
-                autoRestart: settings.autoRestart,
-            });
-            setConfig(saved);
-            setSettings(saved);
-            const result = await PullRoutesFromCloudflare();
-            setConfig(result.config);
-            setSettings(result.config);
-            await refreshLocalState();
-            setAllRoutesLoaded(false);
-            setMessage(result.messages.join('；'));
-        });
-    }
-
-    async function handleSync() {
-        await withBusy('sync', async () => {
+    // syncRoutesAfterLocalChange 在本地映射变更后自动推送远端配置，并保留同步失败提示。
+    async function syncRoutesAfterLocalChange(successPrefix: string) {
+        try {
             const result = await SyncRoutes();
             setConfig(result.config);
             setSettings(result.config);
             await refreshLocalState();
-            setAllRoutesLoaded(false);
-            setMessage(result.messages.join('；'));
-        });
+            const detail = result.messages.length > 0 ? `；${result.messages.join('；')}` : '';
+            setMessage(`${successPrefix}并同步 Cloudflare${detail}`);
+        } catch (error) {
+            await refreshLocalState();
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new Error(`${successPrefix}，但同步 Cloudflare 失败: ${reason}`);
+        }
+    }
+
+    // ensureSelectedRouteTunnel 保证映射表单操作前，后端当前 Tunnel 与下拉选择一致。
+    async function ensureSelectedRouteTunnel() {
+        const targetTunnelId = selectedRouteTunnelId || config.tunnelId;
+        if (!targetTunnelId || targetTunnelId === config.tunnelId) {
+            return;
+        }
+        const targetTunnel = availableTunnels.find((item) => item.id === targetTunnelId);
+        if (!targetTunnel) {
+            throw new Error('请选择有效的 Tunnel');
+        }
+        const saved = await BindTunnel(targetTunnel);
+        setConfig(saved);
+        setSettings(saved);
+        setCredentials((current) => ({...current, tunnelToken: saved.tunnelToken || ''}));
+        const result = await PullRoutesFromCloudflare();
+        setConfig(result.config);
+        setSettings(result.config);
+        setCredentials((current) => ({...current, tunnelToken: result.config.tunnelToken || ''}));
+        setSelectedRouteTunnelId(result.config.tunnelId || targetTunnel.id);
     }
 
     async function handleStart() {
@@ -650,13 +637,13 @@ function App() {
 
                 <nav className="tabs" aria-label="工作区">
                     <button className={activePanel === 'config' ? 'active' : ''} onClick={() => setActivePanel('config')}>
-                        <KeyRound size={16}/>配置
+                        <KeyRound size={16}/>基础配置
+                    </button>
+                    <button className={activePanel === 'tunnels' ? 'active' : ''} onClick={() => setActivePanel('tunnels')}>
+                        <Cloud size={16}/>Tunnel 管理
                     </button>
                     <button className={activePanel === 'routes' ? 'active' : ''} onClick={() => setActivePanel('routes')}>
-                        <Server size={16}/>当前 Tunnel 映射
-                    </button>
-                    <button className={activePanel === 'overview' ? 'active' : ''} onClick={() => setActivePanel('overview')}>
-                        <Cloud size={16}/>映射总览
+                        <Server size={16}/>域名映射
                     </button>
                     <button className={activePanel === 'logs' ? 'active' : ''} onClick={() => setActivePanel('logs')}>
                         <Activity size={16}/>日志
@@ -710,65 +697,6 @@ function App() {
                                         </label>
                                     )}
                                 </div>
-                                <TextInput label="Tunnel 名称" helpLabel="创建 Tunnel" helpURL={helpLinks.tunnelSetup} value={settings.tunnelName} placeholder="desktop-tunnel" onChange={(value) => setSettings({...settings, tunnelName: value})}/>
-                                <TextInput label="Tunnel ID" helpLabel="获取 Tunnel ID" helpURL={helpLinks.tunnelList} value={settings.tunnelId} placeholder="创建后自动填充，也可手动设为当前" onChange={(value) => setSettings({...settings, tunnelId: value})}/>
-                                <div className="tunnel-manager">
-                                    <div className="form-actions">
-                                        <button className="command" disabled={busy !== ''} type="button" onClick={handleListTunnels}>
-                                            <RefreshCw size={16}/>获取 Tunnel
-                                        </button>
-                                    </div>
-                                    {availableTunnels.length > 0 && (
-                                        <div className="tunnel-list">
-                                            {availableTunnels.map((tunnel) => (
-                                                <article className="tunnel-row" key={tunnel.id}>
-                                                    <div>
-                                                        <strong>{tunnel.name || '未命名 Tunnel'}</strong>
-                                                        <span>{tunnel.id}</span>
-                                                    </div>
-                                                    <span className="badge">{tunnel.status || 'unknown'}</span>
-                                                    {deleteTunnelId === tunnel.id ? (
-                                                        <div className="delete-confirm">
-                                                            <label className="checkbox-line">
-                                                                <input type="checkbox" checked={deleteTunnelDNS} onChange={(event) => setDeleteTunnelDNS(event.target.checked)}/>
-                                                                <span>同时删除此 Tunnel 对应 DNS 记录</span>
-                                                            </label>
-                                                            <div className="row-actions confirm-actions">
-                                                                <button className="command danger" type="button" disabled={busy !== ''} onClick={() => handleDeleteTunnel(tunnel)}>
-                                                                    确认删除
-                                                                </button>
-                                                                <button className="command" type="button" disabled={busy !== ''} onClick={() => {
-                                                                    setDeleteTunnelId('');
-                                                                    setDeleteTunnelDNS(false);
-                                                                    setMessage('已取消删除 Tunnel');
-                                                                }}>
-                                                                    取消
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="row-actions">
-                                                            {config.tunnelId === tunnel.id ? (
-                                                                <span className="badge current">当前</span>
-                                                            ) : (
-                                                                <button className="command compact" type="button" disabled={busy !== ''} onClick={() => void withBusy(`bindTunnel-${tunnel.id}`, () => applyTunnel(tunnel))}>
-                                                                    设为当前
-                                                                </button>
-                                                            )}
-                                                            <button className="icon-button danger" type="button" title="删除 Tunnel" disabled={busy !== ''} onClick={() => {
-                                                                setDeleteTunnelId(tunnel.id);
-                                                                setDeleteTunnelDNS(false);
-                                                                setMessage(`请再次确认删除 Tunnel: ${tunnel.name || tunnel.id}`);
-                                                            }}>
-                                                                <Trash2 size={15}/>
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                </article>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
                                 <div className="field">
                                     <span className="field-header">
                                         <span>传输协议</span>
@@ -789,13 +717,10 @@ function App() {
                                     <button className="command primary" disabled={busy !== ''} type="submit">
                                         <Save size={16}/>保存配置
                                     </button>
-                                    <button className="command" disabled={busy !== ''} type="button" onClick={handleCreateTunnel}>
-                                        <Plus size={16}/>创建 Tunnel
-                                    </button>
                                 </div>
                                 <div className="inline-help">
                                     <HelpLink label="获取 Account ID / Zone ID" url={helpLinks.accountAndZone}/>
-                                    <HelpLink label="打开 Tunnel 列表" url={helpLinks.tunnelList}/>
+                                    <HelpLink label="打开 API Token 页面" url={helpLinks.apiToken}/>
                                 </div>
                             </form>
                         </section>
@@ -820,21 +745,110 @@ function App() {
                                     value={credentials.apiToken}
                                     onChange={(value) => setCredentials({...credentials, apiToken: value})}
                                 />
-                                <TextInput label="Tunnel Token（可选）" helpLabel="获取 Tunnel Token" helpURL={helpLinks.tunnelToken} value={credentials.tunnelToken} onChange={(value) => setCredentials({...credentials, tunnelToken: value})}/>
                                 <div className="credential-state">
                                     <span className={status.apiTokenSet ? 'ok' : ''}>{status.authType === 'global_key' ? 'Global API Key' : 'API Token'} {status.apiTokenSet ? '已保存' : '未保存'}</span>
-                                    <span className={status.tunnelTokenSet ? 'ok' : ''}>Tunnel Token {status.tunnelTokenSet ? '已保存' : '可由 API 获取后保存'}</span>
                                 </div>
                                 <button className="command primary" disabled={busy !== ''} type="submit">
                                     <KeyRound size={16}/>保存凭据
                                 </button>
                                 <div className="inline-help">
                                     <HelpLink label="打开 API Token 页面" url={helpLinks.apiToken}/>
-                                    <HelpLink label="Tunnel Token 说明" url={helpLinks.tunnelToken}/>
                                 </div>
                             </form>
                         </section>
                     </div>
+                )}
+
+                {activePanel === 'tunnels' && (
+                    <section className="panel">
+                        <div className="panel-heading with-action">
+                            <PanelTitle icon={<Cloud size={18}/>} title="Tunnel 管理"/>
+                            <div className="route-actions">
+                                <button className="command" type="button" disabled={busy !== ''} onClick={() => handleListTunnels(true)}>
+                                    <RefreshCw size={16}/>刷新
+                                </button>
+                                <button className="command primary" type="button" disabled={busy !== ''} onClick={handleCreateTunnel}>
+                                    <Plus size={16}/>新增 Tunnel
+                                </button>
+                            </div>
+                        </div>
+                        <div className="tunnel-create-row">
+                            <TextInput label="新增 Tunnel 名称" helpLabel="创建 Tunnel" helpURL={helpLinks.tunnelSetup} value={settings.tunnelName} placeholder="desktop-tunnel" onChange={(value) => setSettings({...settings, tunnelName: value})}/>
+                        </div>
+                        <div className="table-shell">
+                            <table className="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>名称</th>
+                                        <th>Tunnel ID</th>
+                                        <th>状态</th>
+                                        <th>当前状态</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {availableTunnels.length === 0 && (
+                                        <tr>
+                                            <td colSpan={5} className="table-empty">{busy === 'listTunnels' ? '正在读取 Tunnel 列表' : '暂无 Tunnel，请点击刷新'}</td>
+                                        </tr>
+                                    )}
+                                    {availableTunnels.map((tunnel) => (
+                                        <tr key={tunnel.id}>
+                                            <td>
+                                                <strong>{tunnel.name || '未命名 Tunnel'}</strong>
+                                            </td>
+                                            <td className="mono-cell">{tunnel.id}</td>
+                                            <td><span className="badge">{tunnel.status || 'unknown'}</span></td>
+                                            <td>{config.tunnelId === tunnel.id ? <span className="badge current">当前</span> : <span className="muted">未选中</span>}</td>
+                                            <td>
+                                                {deleteTunnelId === tunnel.id ? (
+                                                    <div className="delete-confirm">
+                                                        <label className="checkbox-line">
+                                                            <input type="checkbox" checked={deleteTunnelDNS} onChange={(event) => setDeleteTunnelDNS(event.target.checked)}/>
+                                                            <span>同时删除 DNS</span>
+                                                        </label>
+                                                        <div className="row-actions confirm-actions">
+                                                            <button className="command danger compact" type="button" disabled={busy !== ''} onClick={() => handleDeleteTunnel(tunnel)}>
+                                                                确认
+                                                            </button>
+                                                            <button className="command compact" type="button" disabled={busy !== ''} onClick={() => {
+                                                                setDeleteTunnelId('');
+                                                                setDeleteTunnelDNS(false);
+                                                                setMessage('已取消删除 Tunnel');
+                                                            }}>
+                                                                取消
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div className="row-actions">
+                                                        {config.tunnelId !== tunnel.id && (
+                                                            <button className="command compact" type="button" disabled={busy !== ''} onClick={() => void withBusy(`bindTunnel-${tunnel.id}`, () => applyTunnel(tunnel))}>
+                                                                设为当前
+                                                            </button>
+                                                        )}
+                                                        <button className="icon-button danger" type="button" title="删除 Tunnel" disabled={busy !== ''} onClick={() => {
+                                                            setDeleteTunnelId(tunnel.id);
+                                                            setDeleteTunnelDNS(false);
+                                                            setMessage(`请再次确认删除 Tunnel: ${tunnel.name || tunnel.id}`);
+                                                        }}>
+                                                            <Trash2 size={15}/>
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="form-grid single tunnel-token-form">
+                            <TextInput label="Tunnel Token" helpLabel="获取 Tunnel Token" helpURL={helpLinks.tunnelToken} value={credentials.tunnelToken} onChange={() => {}} readOnly/>
+                            <div className="credential-state">
+                                <span className={status.tunnelTokenSet ? 'ok' : ''}>Tunnel Token {status.tunnelTokenSet ? '已从 Cloudflare 获取并保存到本地' : '切换或启动 Tunnel 时自动从 Cloudflare 获取'}</span>
+                            </div>
+                        </div>
+                    </section>
                 )}
 
                 {activePanel === 'routes' && (
@@ -842,6 +856,15 @@ function App() {
                         <section className="panel">
                             <PanelTitle icon={<Plus size={18}/>} title={routeForm.id ? '编辑映射' : '新增映射'}/>
                             <form className="form-grid single" onSubmit={handleRouteSubmit}>
+                                <label className="field">
+                                    <span>Tunnel</span>
+                                    <select value={selectedRouteTunnelId || config.tunnelId} onChange={(event) => handleRouteTunnelChange(event.target.value)}>
+                                        <option value={config.tunnelId}>{config.tunnelName || config.tunnelId || '当前 Tunnel'}</option>
+                                        {availableTunnels.filter((tunnel) => tunnel.id !== config.tunnelId).map((tunnel) => (
+                                            <option value={tunnel.id} key={tunnel.id}>{tunnel.name || tunnel.id}</option>
+                                        ))}
+                                    </select>
+                                </label>
                                 <TextInput label="公开域名" value={routeForm.hostname} placeholder="app.example.com" onChange={(value) => setRouteForm({...routeForm, hostname: value})}/>
                                 <label className="field">
                                     <span>本地协议</span>
@@ -861,7 +884,7 @@ function App() {
                                 </label>
                                 <div className="form-actions">
                                     <button className="command primary" disabled={busy !== ''} type="submit">
-                                        <Save size={16}/>{routeForm.id ? '更新' : '添加'}
+                                        <Save size={16}/>{routeForm.id ? '更新并同步' : '添加并同步'}
                                     </button>
                                     {routeForm.id && (
                                         <button className="command" type="button" onClick={() => setRouteForm(blankRoute)}>
@@ -873,67 +896,45 @@ function App() {
                         </section>
 
                         <section className="panel wide">
-                            <div className="panel-heading with-action">
-                                <PanelTitle icon={<Server size={18}/>} title="当前 Tunnel 映射"/>
-                                <div className="route-actions">
-                                    <button className="command" onClick={handlePullRoutes} disabled={busy !== ''}>
-                                        <RefreshCw size={16}/>读取 Cloudflare
-                                    </button>
-                                    <button className="command primary" onClick={handleSync} disabled={busy !== ''}>
-                                        <Wifi size={16}/>同步 Cloudflare
-                                    </button>
-                                </div>
-                            </div>
-                            <div className="route-list">
-                                {config.routes.length === 0 && <div className="empty">暂无映射</div>}
-                                {config.routes.map((route) => (
-                                    <article className="route-row" key={route.id}>
-                                        <div>
-                                            <strong>{route.hostname}</strong>
-                                            <span>{route.serviceProtocol}://{route.serviceHost}:{route.servicePort}</span>
-                                            <span>归属: {config.tunnelName || config.tunnelId || '未绑定 Tunnel'}</span>
-                                        </div>
-                                        <span className={route.enabled ? 'badge ok' : 'badge'}>{route.enabled ? '启用' : '停用'}</span>
-                                        <div className="row-actions">
-                                            <button className="icon-button" title="编辑" onClick={() => setRouteForm(route)}>
-                                                <Pencil size={15}/>
-                                            </button>
-                                            <button className="icon-button danger" title="删除" onClick={() => handleRemoveRoute(route)} disabled={busy !== ''}>
-                                                <Trash2 size={15}/>
-                                            </button>
-                                        </div>
-                                    </article>
-                                ))}
+                            <PanelTitle icon={<Server size={18}/>} title="域名映射"/>
+                            <div className="table-shell">
+                                <table className="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>公开域名</th>
+                                            <th>本地服务</th>
+                                            <th>状态</th>
+                                            <th>操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {config.routes.length === 0 && (
+                                            <tr>
+                                                <td colSpan={4} className="table-empty">暂无映射</td>
+                                            </tr>
+                                        )}
+                                        {config.routes.map((route) => (
+                                            <tr key={route.id}>
+                                                <td><strong>{route.hostname}</strong></td>
+                                                <td>{route.serviceProtocol}://{route.serviceHost}:{route.servicePort}</td>
+                                                <td><span className={route.enabled ? 'badge ok' : 'badge'}>{route.enabled ? '启用' : '停用'}</span></td>
+                                                <td>
+                                                    <div className="row-actions">
+                                                        <button className="icon-button" title="编辑" onClick={() => setRouteForm(route)}>
+                                                            <Pencil size={15}/>
+                                                        </button>
+                                                        <button className="icon-button danger" title="删除" onClick={() => handleRemoveRoute(route)} disabled={busy !== ''}>
+                                                            <Trash2 size={15}/>
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
                             </div>
                         </section>
                     </div>
-                )}
-
-                {activePanel === 'overview' && (
-                    <section className="panel">
-                        <div className="panel-heading with-action">
-                            <PanelTitle icon={<Cloud size={18}/>} title="映射总览"/>
-                            <button className="command" onClick={() => handleListAllTunnelRoutes(true)} disabled={busy !== ''}>
-                                <RefreshCw size={16}/>刷新全部
-                            </button>
-                        </div>
-                        <div className="route-list">
-                            {allTunnelRoutes.length === 0 && <div className="empty">{busy === 'allRoutes' ? '正在读取所有 Tunnel 映射' : '暂无全账号映射'}</div>}
-                            {allTunnelRoutes.map((route) => (
-                                <article className="route-row overview-row" key={`${route.tunnelId}-${route.hostname}-${route.source}`}>
-                                    <div>
-                                        <strong>{route.hostname}</strong>
-                                        <span>{route.serviceProtocol}://{route.serviceHost}:{route.servicePort}</span>
-                                    </div>
-                                    <div className="route-owner">
-                                        <strong>{route.tunnelName || '未命名 Tunnel'}</strong>
-                                        <span>{route.tunnelId}</span>
-                                    </div>
-                                    <span className={route.source === 'dns' ? 'badge warning' : 'badge ok'}>{route.source === 'dns' ? '仅 DNS' : 'ingress'}</span>
-                                </article>
-                            ))}
-                        </div>
-                    </section>
                 )}
 
                 {activePanel === 'logs' && (
@@ -976,7 +977,7 @@ function PanelTitle({icon, title}: { icon: JSX.Element; title: string }) {
     );
 }
 
-function TextInput({label, value, onChange, placeholder = '', type = 'text', helpLabel = '', helpURL = ''}: {
+function TextInput({label, value, onChange, placeholder = '', type = 'text', helpLabel = '', helpURL = '', readOnly = false}: {
     label: string;
     value: string;
     onChange: (value: string) => void;
@@ -984,6 +985,7 @@ function TextInput({label, value, onChange, placeholder = '', type = 'text', hel
     type?: string;
     helpLabel?: string;
     helpURL?: string;
+    readOnly?: boolean;
 }) {
     return (
         <div className="field">
@@ -994,7 +996,7 @@ function TextInput({label, value, onChange, placeholder = '', type = 'text', hel
                     {helpLabel && helpURL && <HelpLink label={helpLabel} url={helpURL}/>}
                 </span>
             </span>
-            <input aria-label={label} type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)}/>
+            <input aria-label={label} type={type} value={value} placeholder={placeholder} readOnly={readOnly} onChange={(event) => onChange(event.target.value)}/>
         </div>
     );
 }
