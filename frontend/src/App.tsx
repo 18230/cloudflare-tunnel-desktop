@@ -413,8 +413,9 @@ function App() {
         setCredentials((current) => ({...current, tunnelToken: result.config.tunnelToken || ''}));
         setSelectedRouteTunnelId(result.config.tunnelId || tunnel.id);
         setActivePanel('routes');
+        const restartMessage = await restartTunnelAfterSwitch();
         await refreshLocalState();
-        setMessage(`已设为当前 Tunnel 并读取映射: ${tunnel.name || tunnel.id}`);
+        setMessage(`已设为当前 Tunnel 并读取映射: ${tunnel.name || tunnel.id}${restartMessage}`);
     }
 
     async function handleDeleteTunnel(tunnel: CloudflareTunnel) {
@@ -531,6 +532,23 @@ function App() {
         setSettings(result.config);
         setCredentials((current) => ({...current, tunnelToken: result.config.tunnelToken || ''}));
         setSelectedRouteTunnelId(result.config.tunnelId || targetTunnel.id);
+        await restartTunnelAfterSwitch();
+    }
+
+    // restartTunnelAfterSwitch 在切换当前 Tunnel 后同步运行态，避免界面和后台连接指向不同 Tunnel。
+    async function restartTunnelAfterSwitch() {
+        const currentStatus = await GetStatus();
+        if (!currentStatus.running) {
+            setStatus(currentStatus);
+            return '';
+        }
+        try {
+            setStatus(await RestartTunnel());
+            return '，并已重启本地连接';
+        } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new Error(`已切换 Tunnel，但重启本地连接失败: ${reason}`);
+        }
     }
 
     async function handleStart() {

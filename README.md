@@ -9,7 +9,7 @@
 - 页面分为基础配置、Tunnel 管理、域名映射、日志四个工作区。
 - 手动配置 Account ID、Zone ID、根域名、认证方式和运行参数。
 - API Token 或 Global API Key 按自用场景明文保存到本地配置文件，界面可查看和复制。
-- 创建、刷新、删除 Cloudflare Tunnel，并可将指定 Tunnel 设为当前管理对象。
+- 创建、刷新、删除 Cloudflare Tunnel，并可将指定 Tunnel 设为当前管理对象；本地连接运行中切换 Tunnel 时会自动重启连接。
 - 自动从 Cloudflare 获取当前 Tunnel 的 Tunnel Token；界面只读展示，不提供手工修改入口。
 - 管理当前 Tunnel 的 `hostname -> http(s)://host:port` 映射，新增、编辑、删除后自动同步 Cloudflare Tunnel ingress 配置和 CNAME DNS 记录。
 - 启动、停止、重启 `cloudflared`，支持 `auto`、`quic`、`http2` 传输协议。
@@ -152,7 +152,7 @@ Windows exe 的真实运行校验需要在 Windows 实机、虚拟机或 GitHub 
 最新已验证发布版本是：
 
 ```text
-https://github.com/18230/cloudflare-tunnel-desktop/releases/tag/v1.0.1
+https://github.com/18230/cloudflare-tunnel-desktop/releases/tag/v1.0.2
 ```
 
 如果 macOS codesign 报 `resource fork, Finder information, or similar detritus not allowed`，清理构建产物扩展属性后再验签：
