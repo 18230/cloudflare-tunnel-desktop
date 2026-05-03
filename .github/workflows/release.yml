@@ -55,6 +55,12 @@ jobs:
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
 
+      - name: Build frontend for tests
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
       - name: Run Go tests
         run: go test ./...
 
@@ -124,6 +130,12 @@ jobs:
 
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+
+      - name: Build frontend for tests
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
 
       - name: Run Go tests
         run: go test ./...
