@@ -3,11 +3,17 @@
 package main
 
 import (
+	_ "embed"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"syscall"
 	"unsafe"
 )
+
+//go:embed build/windows/icon.ico
+var windowsTrayIconBytes []byte
 
 const (
 	windowsTrayID              = 1
@@ -35,6 +41,7 @@ const (
 
 	notifyIconVersion4 = 4
 	idiApplication     = 32512
+	imageIcon          = 1
 
 	mfString    = 0x00000000
 	mfDisabled  = 0x00000002
@@ -42,6 +49,9 @@ const (
 
 	tpmRightButton = 0x0002
 	tpmReturnCmd   = 0x0100
+
+	lrLoadFromFile = 0x00000010
+	lrDefaultSize  = 0x00000040
 )
 
 var (
@@ -67,6 +77,7 @@ var (
 	procDispatchMessageW = windowsUser32.NewProc("DispatchMessageW")
 	procPostMessageW     = windowsUser32.NewProc("PostMessageW")
 	procLoadIconW        = windowsUser32.NewProc("LoadIconW")
+	procLoadImageW       = windowsUser32.NewProc("LoadImageW")
 	procGetCursorPos     = windowsUser32.NewProc("GetCursorPos")
 	procSetForegroundWnd = windowsUser32.NewProc("SetForegroundWindow")
 	procCreatePopupMenu  = windowsUser32.NewProc("CreatePopupMenu")
@@ -75,6 +86,9 @@ var (
 	procDestroyMenu      = windowsUser32.NewProc("DestroyMenu")
 	procExtractIconW     = windowsShell32.NewProc("ExtractIconW")
 	procShellNotifyIconW = windowsShell32.NewProc("Shell_NotifyIconW")
+
+	windowsTrayIconOnce   sync.Once
+	windowsTrayIconHandle uintptr
 )
 
 type windowsNotifyIconData struct {
@@ -208,8 +222,8 @@ func addWindowsTrayIcon(hwnd uintptr) bool {
 		return false
 	}
 	nid.UVersion = notifyIconVersion4
-	ret, _, _ := procShellNotifyIconW.Call(uintptr(nimSetVersion), uintptr(unsafe.Pointer(&nid)))
-	return ret != 0
+	procShellNotifyIconW.Call(uintptr(nimSetVersion), uintptr(unsafe.Pointer(&nid)))
+	return true
 }
 
 // newWindowsNotifyIconData 生成 Shell_NotifyIcon 使用的固定结构体。
@@ -229,6 +243,41 @@ func newWindowsNotifyIconData(hwnd uintptr) windowsNotifyIconData {
 
 // loadWindowsTrayIcon 从当前 exe 提取应用图标，使托盘图标和 Windows 应用图标保持一致。
 func loadWindowsTrayIcon() uintptr {
+	windowsTrayIconOnce.Do(func() {
+		windowsTrayIconHandle = loadWindowsTrayIconFromEmbeddedICO()
+		if windowsTrayIconHandle == 0 {
+			windowsTrayIconHandle = loadWindowsTrayIconFromExecutable()
+		}
+		if windowsTrayIconHandle == 0 {
+			windowsTrayIconHandle, _, _ = procLoadIconW.Call(0, uintptr(idiApplication))
+		}
+	})
+	return windowsTrayIconHandle
+}
+
+// loadWindowsTrayIconFromEmbeddedICO 将打包用 ico 写到临时文件，再由 Win32 加载为托盘 HICON。
+func loadWindowsTrayIconFromEmbeddedICO() uintptr {
+	iconPath := filepath.Join(os.TempDir(), "cloudflare-tunnel-desktop-tray.ico")
+	if err := os.WriteFile(iconPath, windowsTrayIconBytes, 0o600); err != nil {
+		return 0
+	}
+	iconPathPtr, err := syscall.UTF16PtrFromString(iconPath)
+	if err != nil {
+		return 0
+	}
+	hIcon, _, _ := procLoadImageW.Call(
+		0,
+		uintptr(unsafe.Pointer(iconPathPtr)),
+		uintptr(imageIcon),
+		0,
+		0,
+		uintptr(lrLoadFromFile|lrDefaultSize),
+	)
+	return hIcon
+}
+
+// loadWindowsTrayIconFromExecutable 从当前 exe 资源中提取图标，作为嵌入 ico 加载失败时的兜底。
+func loadWindowsTrayIconFromExecutable() uintptr {
 	var exePath [260]uint16
 	length, _, _ := procGetModuleFileW.Call(0, uintptr(unsafe.Pointer(&exePath[0])), uintptr(len(exePath)))
 	if length > 0 {
@@ -236,15 +285,14 @@ func loadWindowsTrayIcon() uintptr {
 			return hIcon
 		}
 	}
-	hIcon, _, _ := procLoadIconW.Call(0, uintptr(idiApplication))
-	return hIcon
+	return 0
 }
 
 // windowsTrayWndProc 处理托盘点击和菜单命令。
 func windowsTrayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr) uintptr {
 	switch msg {
 	case windowsTrayCallbackMessage:
-		switch uint32(lparam) {
+		switch uint32(lparam & 0xffff) {
 		case wmLButtonUp, wmLButtonDblClk:
 			showWindowsTrayMenu(hwnd)
 			return 0
