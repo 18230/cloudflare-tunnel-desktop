@@ -98,3 +98,7 @@ import "C"
 func setupMenuBarTray(app *App) {
 	C.cloudflareSetupTray()
 }
+
+// teardownMenuBarTray 在 macOS 退出时保留系统回收逻辑，避免重复操作状态栏对象。
+func teardownMenuBarTray(app *App) {
+}

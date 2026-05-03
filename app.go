@@ -74,11 +74,12 @@ func (a *App) startup(ctx context.Context) {
 	go a.runHealthMonitor()
 }
 
-// shutdown 在应用退出时停止后台监控和 cloudflared 进程。
+// shutdown 在应用退出时停止后台监控、托盘入口和 cloudflared 进程。
 func (a *App) shutdown(ctx context.Context) {
 	a.shutdownOnce.Do(func() {
 		close(a.stopHealthMonitor)
 	})
+	teardownMenuBarTray(a)
 	_ = a.manager.Stop()
 }
 
@@ -797,18 +798,15 @@ func (a *App) GetCloudflaredInstallStatus() CloudflaredInstallStatus {
 	return a.currentCloudflaredInstallStatus()
 }
 
-// InstallCloudflared 通过 Homebrew 异步安装 cloudflared。
+// InstallCloudflared 根据当前系统异步安装 cloudflared。
 func (a *App) InstallCloudflared() (CloudflaredInstallStatus, error) {
 	current := a.currentCloudflaredInstallStatus()
 	if current.Installed {
 		return current, nil
 	}
-	if runtime.GOOS != "darwin" {
-		return CloudflaredInstallStatus{}, fmt.Errorf("当前自动安装只支持 macOS")
-	}
-	brewPath, err := findExecutableWithFallback("brew", []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"})
+	installer, err := cloudflaredInstallCommand()
 	if err != nil {
-		return CloudflaredInstallStatus{}, fmt.Errorf("未找到 Homebrew，请先安装 Homebrew 后再自动安装 cloudflared")
+		return CloudflaredInstallStatus{}, err
 	}
 
 	a.mu.Lock()
@@ -820,12 +818,12 @@ func (a *App) InstallCloudflared() (CloudflaredInstallStatus, error) {
 	a.installStatus = CloudflaredInstallStatus{
 		Installing: true,
 		Status:     "准备安装 cloudflared",
-		Logs:       []string{"使用 Homebrew 安装 cloudflared"},
+		Logs:       append([]string{}, installer.Logs...),
 	}
 	status := a.installStatus
 	a.mu.Unlock()
 
-	go a.runCloudflaredInstall(brewPath)
+	go a.runCloudflaredInstall(installer)
 	return status, nil
 }
 
@@ -852,9 +850,79 @@ func (a *App) currentCloudflaredInstallStatus() CloudflaredInstallStatus {
 	return result
 }
 
-// runCloudflaredInstall 执行 Homebrew 安装并持续记录输出。
-func (a *App) runCloudflaredInstall(brewPath string) {
-	cmd := exec.Command(brewPath, "install", "cloudflared")
+// cloudflaredInstaller 描述当前系统可用的 cloudflared 安装命令。
+type cloudflaredInstaller struct {
+	Name       string
+	Executable string
+	Args       []string
+	Logs       []string
+}
+
+// cloudflaredInstallCommand 根据当前系统选择自动安装 cloudflared 的命令。
+func cloudflaredInstallCommand() (cloudflaredInstaller, error) {
+	return cloudflaredInstallCommandForOS(runtime.GOOS)
+}
+
+// cloudflaredInstallCommandForOS 为指定系统选择安装命令，便于单元测试覆盖跨平台分支。
+func cloudflaredInstallCommandForOS(goos string) (cloudflaredInstaller, error) {
+	switch goos {
+	case "darwin":
+		brewPath, err := findExecutableWithFallback("brew", []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"})
+		if err != nil {
+			return cloudflaredInstaller{}, fmt.Errorf("未找到 Homebrew，请先安装 Homebrew 后再自动安装 cloudflared")
+		}
+		return cloudflaredInstaller{
+			Name:       "Homebrew",
+			Executable: brewPath,
+			Args:       []string{"install", "cloudflared"},
+			Logs:       []string{"使用 Homebrew 安装 cloudflared"},
+		}, nil
+	case "windows":
+		return windowsCloudflaredInstallCommand()
+	default:
+		return cloudflaredInstaller{}, fmt.Errorf("当前自动安装支持 macOS 和 Windows，请手动安装 cloudflared 后再重试")
+	}
+}
+
+// windowsCloudflaredInstallCommand 按 Windows 常见包管理器优先级选择安装命令。
+func windowsCloudflaredInstallCommand() (cloudflaredInstaller, error) {
+	if wingetPath, err := exec.LookPath("winget"); err == nil {
+		return cloudflaredInstaller{
+			Name:       "winget",
+			Executable: wingetPath,
+			Args: []string{
+				"install",
+				"--id", "Cloudflare.cloudflared",
+				"--exact",
+				"--silent",
+				"--accept-package-agreements",
+				"--accept-source-agreements",
+			},
+			Logs: []string{"使用 winget 安装 cloudflared"},
+		}, nil
+	}
+	if scoopPath, err := exec.LookPath("scoop"); err == nil {
+		return cloudflaredInstaller{
+			Name:       "scoop",
+			Executable: scoopPath,
+			Args:       []string{"install", "cloudflared"},
+			Logs:       []string{"未找到 winget，改用 scoop 安装 cloudflared"},
+		}, nil
+	}
+	if chocoPath, err := exec.LookPath("choco"); err == nil {
+		return cloudflaredInstaller{
+			Name:       "Chocolatey",
+			Executable: chocoPath,
+			Args:       []string{"install", "cloudflared", "-y"},
+			Logs:       []string{"未找到 winget 或 scoop，改用 Chocolatey 安装 cloudflared"},
+		}, nil
+	}
+	return cloudflaredInstaller{}, fmt.Errorf("未找到 winget、scoop 或 choco，请先安装任一 Windows 包管理器，或手动安装 cloudflared.exe 后再重试")
+}
+
+// runCloudflaredInstall 执行系统安装命令并持续记录输出。
+func (a *App) runCloudflaredInstall(installer cloudflaredInstaller) {
+	cmd := exec.Command(installer.Executable, installer.Args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		a.finishCloudflaredInstall("连接安装输出失败: "+err.Error(), false)
@@ -869,7 +937,7 @@ func (a *App) runCloudflaredInstall(brewPath string) {
 		a.finishCloudflaredInstall("启动安装失败: "+err.Error(), false)
 		return
 	}
-	a.appendCloudflaredInstallLog("Homebrew 安装进程已启动")
+	a.appendCloudflaredInstallLog(installer.Name + " 安装进程已启动")
 	done := make(chan struct{}, 2)
 	go a.scanInstallPipe(stdout, done)
 	go a.scanInstallPipe(stderr, done)
@@ -897,7 +965,7 @@ func (a *App) runCloudflaredInstall(brewPath string) {
 	a.manager.addLog("info", "cloudflared", "cloudflared 安装完成", "install")
 }
 
-// scanInstallPipe 读取 Homebrew 输出并记录为安装进度。
+// scanInstallPipe 读取安装命令输出并记录为安装进度。
 func (a *App) scanInstallPipe(pipe any, done chan<- struct{}) {
 	defer func() { done <- struct{}{} }()
 	reader, ok := pipe.(interface {

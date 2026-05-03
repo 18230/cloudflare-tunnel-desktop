@@ -2,7 +2,7 @@
 
 一个基于 Go + Wails + React/TypeScript 的桌面工具，用图形界面管理单个 Cloudflare Tunnel 下的多个 HTTP/HTTPS 域名映射。
 
-当前主力适配 macOS，GitHub Actions 已支持自动构建和发布 macOS arm64 `dmg` 与 Windows amd64 `exe`。Windows 版本已做 CI 启动冒烟测试，但托盘入口和 `cloudflared` 自动安装仍未做完整 Windows 体验适配。
+当前适配 macOS 和 Windows，GitHub Actions 已支持自动构建和发布 macOS arm64 `dmg` 与 Windows amd64 `exe`。macOS 顶部菜单栏和 Windows 通知区均支持关闭窗口后常驻，并可从托盘重新唤起或彻底退出。
 
 ## 当前能力
 
@@ -12,6 +12,7 @@
 - 管理 `hostname -> http(s)://host:port` 映射。
 - 同步 Cloudflare Tunnel ingress 配置和 CNAME DNS 记录。
 - 启动、停止、重启 `cloudflared`，支持 `auto`、`quic`、`http2` 传输协议。
+- 自动检测和安装 `cloudflared`：macOS 使用 Homebrew，Windows 优先使用 `winget`，并回退到 `scoop` 或 Chocolatey。
 - 监听 cloudflared 日志，标记 1033、连接、DNS、鉴权相关事件。
 - 网络变化、进程异常退出、Tunnel down/degraded 时按退避策略尝试恢复。
 
@@ -76,14 +77,14 @@ cloudflared --version
 open build/bin/cloudflare-tunnel-desktop.app
 ```
 
-应用启动后会在 macOS 顶部菜单栏显示 `CF` 入口。关闭主窗口只会隐藏窗口，后台进程仍会保留；需要完全退出时，在顶部菜单栏点击 `CF`，选择 `彻底退出`。
+应用启动后会在 macOS 顶部菜单栏或 Windows 通知区显示常驻入口。关闭主窗口只会隐藏窗口，后台进程仍会保留；需要完全退出时，在托盘菜单里选择 `彻底退出`。
 
 ## 换电脑安装
 
 只运行应用时需要：
 
 - macOS 或 Windows 电脑。
-- `cloudflared` CLI，确保 `cloudflared --version` 可执行。当前自动安装只支持 macOS，Windows 需要手动安装 `cloudflared.exe` 并加入 `PATH`。
+- `cloudflared` CLI，确保 `cloudflared --version` 可执行。也可以在界面中点击安装：macOS 需要 Homebrew；Windows 优先使用 Cloudflare [官方下载文档](https://developers.cloudflare.com/tunnel/downloads/)中的 `winget install --id Cloudflare.cloudflared`，如果没有 `winget` 会尝试 `scoop install cloudflared` 或 `choco install cloudflared -y`。
 - 构建好的 `cloudflare-tunnel-desktop` 二进制、`.app`、`.dmg` 或 `.exe`。
 - Cloudflare API Token，或 Global API Key + Cloudflare 账号邮箱。API Token 权限至少包含目标账号的 Tunnel Read/Write 和目标 Zone 的 Zone Read、DNS Read/Write。
 
@@ -135,7 +136,7 @@ Windows exe 的真实运行校验需要在 Windows 实机、虚拟机或 GitHub 
 仓库内置 `.github/workflows/release.yml`：
 
 - push 到 `main` 或发起 PR 时，自动构建 macOS dmg 和 Windows exe，并运行 Go 测试。
-- Windows job 会验证 exe 是 PE 可执行文件，并做启动冒烟测试。
+- Windows job 会验证 exe 是 PE 可执行文件，并做启动冒烟测试。托盘交互和包管理器安装仍建议在 Windows 实机或虚拟机做一次人工验收。
 - macOS job 会构建 `.app`、生成 dmg，并执行 `hdiutil verify`。
 - tag 以 `v` 开头时会自动发布 GitHub Release。
 - 也可以在 Actions 页面手动运行 `Build and Release`，设置 `publish=true` 并填写 `release_tag`，例如 `v0.1.1`。

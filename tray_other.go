@@ -1,7 +1,11 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package main
 
-// setupMenuBarTray 在非 macOS 平台保持空实现，避免影响后续 Windows 扩展。
+// setupMenuBarTray 在暂未实现原生托盘的平台保持空实现。
 func setupMenuBarTray(app *App) {
+}
+
+// teardownMenuBarTray 在暂未实现原生托盘的平台保持空实现。
+func teardownMenuBarTray(app *App) {
 }

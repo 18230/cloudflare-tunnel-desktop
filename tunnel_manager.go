@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
-var cloudflaredExecutable = "cloudflared"
+var cloudflaredExecutable = cloudflaredExecutableName()
 
 var cloudflaredCommonPaths = []string{
 	"/opt/homebrew/bin/cloudflared",
@@ -367,12 +369,55 @@ func findCloudflaredPath() (string, error) {
 	if path, err := exec.LookPath(cloudflaredExecutable); err == nil {
 		return path, nil
 	}
-	for _, path := range cloudflaredCommonPaths {
+	for _, path := range cloudflaredCandidatePaths() {
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
 			return path, nil
 		}
 	}
 	return "", fmt.Errorf("未找到 cloudflared")
+}
+
+// cloudflaredExecutableName 返回当前系统默认的 cloudflared 可执行文件名。
+func cloudflaredExecutableName() string {
+	if runtime.GOOS == "windows" {
+		return "cloudflared.exe"
+	}
+	return "cloudflared"
+}
+
+// cloudflaredCandidatePaths 返回桌面启动场景中 PATH 之外的常见安装位置。
+func cloudflaredCandidatePaths() []string {
+	paths := append([]string{}, cloudflaredCommonPaths...)
+	if runtime.GOOS != "windows" {
+		return paths
+	}
+	paths = append(paths, windowsCloudflaredCandidatePaths()...)
+	return paths
+}
+
+// windowsCloudflaredCandidatePaths 补充 winget、scoop 和 Chocolatey 的常见 cloudflared.exe 位置。
+func windowsCloudflaredCandidatePaths() []string {
+	paths := []string{}
+	if programFiles := os.Getenv("ProgramFiles"); programFiles != "" {
+		paths = append(paths, filepath.Join(programFiles, "cloudflared", "cloudflared.exe"))
+	}
+	if programFilesX86 := os.Getenv("ProgramFiles(x86)"); programFilesX86 != "" {
+		paths = append(paths, filepath.Join(programFilesX86, "cloudflared", "cloudflared.exe"))
+	}
+	if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+		matches, _ := filepath.Glob(filepath.Join(localAppData, "Microsoft", "WinGet", "Packages", "Cloudflare.cloudflared_*", "cloudflared.exe"))
+		paths = append(paths, matches...)
+	}
+	if userProfile := os.Getenv("USERPROFILE"); userProfile != "" {
+		paths = append(paths, filepath.Join(userProfile, "scoop", "shims", "cloudflared.exe"))
+	}
+	if programData := os.Getenv("ProgramData"); programData != "" {
+		paths = append(paths,
+			filepath.Join(programData, "scoop", "shims", "cloudflared.exe"),
+			filepath.Join(programData, "chocolatey", "bin", "cloudflared.exe"),
+		)
+	}
+	return paths
 }
 
 // parseCloudflaredLine 解析 cloudflared JSON 或普通文本日志。
