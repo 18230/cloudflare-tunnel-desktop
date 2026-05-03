@@ -923,6 +923,7 @@ func windowsCloudflaredInstallCommand() (cloudflaredInstaller, error) {
 // runCloudflaredInstall 执行系统安装命令并持续记录输出。
 func (a *App) runCloudflaredInstall(installer cloudflaredInstaller) {
 	cmd := exec.Command(installer.Executable, installer.Args...)
+	configureBackgroundCommand(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		a.finishCloudflaredInstall("连接安装输出失败: "+err.Error(), false)

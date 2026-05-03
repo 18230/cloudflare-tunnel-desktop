@@ -18,7 +18,7 @@ on:
           - 'false'
           - 'true'
       release_tag:
-        description: '发布版本标签，例如 v0.1.1；publish=true 时必填'
+        description: '发布版本标签，例如 v1.0.0；publish=true 时必填'
         required: false
         type: string
 

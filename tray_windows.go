@@ -42,6 +42,7 @@ const (
 	notifyIconVersion4 = 4
 	idiApplication     = 32512
 	imageIcon          = 1
+	appIconResourceID  = 3
 
 	mfString    = 0x00000000
 	mfDisabled  = 0x00000002
@@ -52,6 +53,7 @@ const (
 
 	lrLoadFromFile = 0x00000010
 	lrDefaultSize  = 0x00000040
+	lrShared       = 0x00008000
 )
 
 var (
@@ -60,6 +62,7 @@ var (
 	windowsTrayApp      *App
 	windowsTrayHwnd     uintptr
 	windowsTrayCallback = syscall.NewCallback(windowsTrayWndProc)
+	windowsTrayInstance uintptr
 
 	windowsKernel32 = syscall.NewLazyDLL("kernel32.dll")
 	windowsUser32   = syscall.NewLazyDLL("user32.dll")
@@ -78,6 +81,7 @@ var (
 	procPostMessageW     = windowsUser32.NewProc("PostMessageW")
 	procLoadIconW        = windowsUser32.NewProc("LoadIconW")
 	procLoadImageW       = windowsUser32.NewProc("LoadImageW")
+	procGetSystemMetrics = windowsUser32.NewProc("GetSystemMetrics")
 	procGetCursorPos     = windowsUser32.NewProc("GetCursorPos")
 	procSetForegroundWnd = windowsUser32.NewProc("SetForegroundWindow")
 	procCreatePopupMenu  = windowsUser32.NewProc("CreatePopupMenu")
@@ -169,6 +173,7 @@ func runWindowsTray(app *App) {
 
 	className, _ := syscall.UTF16PtrFromString("CloudflareTunnelDesktopTray")
 	hInstance, _, _ := procGetModuleHandleW.Call(0)
+	windowsTrayInstance = hInstance
 	wndClass := windowsWndClassEx{
 		CbSize:        uint32(unsafe.Sizeof(windowsWndClassEx{})),
 		LpfnWndProc:   windowsTrayCallback,
@@ -241,10 +246,13 @@ func newWindowsNotifyIconData(hwnd uintptr) windowsNotifyIconData {
 	return nid
 }
 
-// loadWindowsTrayIcon 从当前 exe 提取应用图标，使托盘图标和 Windows 应用图标保持一致。
+// loadWindowsTrayIcon 加载应用图标，使托盘图标和 Windows 应用图标保持一致。
 func loadWindowsTrayIcon() uintptr {
 	windowsTrayIconOnce.Do(func() {
-		windowsTrayIconHandle = loadWindowsTrayIconFromEmbeddedICO()
+		windowsTrayIconHandle = loadWindowsTrayIconFromResource()
+		if windowsTrayIconHandle == 0 {
+			windowsTrayIconHandle = loadWindowsTrayIconFromEmbeddedICO()
+		}
 		if windowsTrayIconHandle == 0 {
 			windowsTrayIconHandle = loadWindowsTrayIconFromExecutable()
 		}
@@ -253,6 +261,26 @@ func loadWindowsTrayIcon() uintptr {
 		}
 	})
 	return windowsTrayIconHandle
+}
+
+// loadWindowsTrayIconFromResource 从 Wails 编译进 exe 的应用图标资源加载托盘图标。
+func loadWindowsTrayIconFromResource() uintptr {
+	if windowsTrayInstance == 0 {
+		return 0
+	}
+	hIcon, _, _ := procLoadImageW.Call(
+		windowsTrayInstance,
+		uintptr(appIconResourceID),
+		uintptr(imageIcon),
+		uintptr(systemMetric(49, 16)),
+		uintptr(systemMetric(50, 16)),
+		uintptr(lrShared),
+	)
+	if hIcon != 0 {
+		return hIcon
+	}
+	hIcon, _, _ = procLoadIconW.Call(windowsTrayInstance, uintptr(appIconResourceID))
+	return hIcon
 }
 
 // loadWindowsTrayIconFromEmbeddedICO 将打包用 ico 写到临时文件，再由 Win32 加载为托盘 HICON。
@@ -274,6 +302,15 @@ func loadWindowsTrayIconFromEmbeddedICO() uintptr {
 		uintptr(lrLoadFromFile|lrDefaultSize),
 	)
 	return hIcon
+}
+
+// systemMetric 读取 Windows 系统尺寸，失败时使用默认值。
+func systemMetric(index int32, fallback int32) int32 {
+	value, _, _ := procGetSystemMetrics.Call(uintptr(index))
+	if value == 0 {
+		return fallback
+	}
+	return int32(value)
 }
 
 // loadWindowsTrayIconFromExecutable 从当前 exe 资源中提取图标，作为嵌入 ico 加载失败时的兜底。

@@ -100,6 +100,7 @@ func (m *TunnelManager) startProcess(token string, tunnelID string, protocol str
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, path, BuildCloudflaredArgs(protocol, tunnelID)...)
+	configureBackgroundCommand(cmd)
 	cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+token)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -355,7 +356,9 @@ func (m *TunnelManager) refreshCloudflaredInfo() {
 		m.cloudflaredVersion = "未安装"
 		return
 	}
-	output, err := exec.Command(path, "--version").CombinedOutput()
+	cmd := exec.Command(path, "--version")
+	configureBackgroundCommand(cmd)
+	output, err := cmd.CombinedOutput()
 	m.cloudflaredPath = path
 	if err != nil {
 		m.cloudflaredVersion = "版本读取失败"

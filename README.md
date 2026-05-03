@@ -139,7 +139,7 @@ Windows exe 的真实运行校验需要在 Windows 实机、虚拟机或 GitHub 
 - Windows job 会验证 exe 是 PE 可执行文件，并做启动冒烟测试。托盘交互和包管理器安装仍建议在 Windows 实机或虚拟机做一次人工验收。
 - macOS job 会构建 `.app`、生成 dmg，并执行 `hdiutil verify`。
 - tag 以 `v` 开头时会自动发布 GitHub Release。
-- 也可以在 Actions 页面手动运行 `Build and Release`，设置 `publish=true` 并填写 `release_tag`，例如 `v0.1.1`。
+- 也可以在 Actions 页面手动运行 `Build and Release`，设置 `publish=true` 并填写 `release_tag`，例如 `v1.0.0`。
 
 发布产物包括：
 
@@ -150,7 +150,7 @@ Windows exe 的真实运行校验需要在 Windows 实机、虚拟机或 GitHub 
 最新已验证发布版本是：
 
 ```text
-https://github.com/18230/cloudflare-tunnel-desktop/releases/tag/v0.1.1
+https://github.com/18230/cloudflare-tunnel-desktop/releases/tag/v1.0.0
 ```
 
 如果 macOS codesign 报 `resource fork, Finder information, or similar detritus not allowed`，清理构建产物扩展属性后再验签：
