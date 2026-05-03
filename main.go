@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -14,7 +15,9 @@ var assets embed.FS
 func main() {
 	// 创建应用实例并绑定给 Wails 前端。
 	app := NewApp()
-	setupMenuBarTray(app)
+	if shouldSetupMenuBarTray() {
+		setupMenuBarTray(app)
+	}
 
 	err := wails.Run(&options.App{
 		Title:  "Cloudflare Tunnel Desktop",
@@ -36,4 +39,9 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+}
+
+// shouldSetupMenuBarTray 判断当前进程是否应该初始化系统菜单栏入口。
+func shouldSetupMenuBarTray() bool {
+	return os.Getenv("CI") != "true"
 }
