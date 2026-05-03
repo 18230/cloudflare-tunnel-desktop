@@ -1,6 +1,8 @@
 # Cloudflare Tunnel Desktop
 
-一个基于 Go + Wails + React/TypeScript 的 macOS 桌面工具，用图形界面管理单个 Cloudflare Tunnel 下的多个 HTTP/HTTPS 域名映射。
+一个基于 Go + Wails + React/TypeScript 的桌面工具，用图形界面管理单个 Cloudflare Tunnel 下的多个 HTTP/HTTPS 域名映射。
+
+当前主力适配 macOS，GitHub Actions 已支持自动构建和发布 macOS arm64 `dmg` 与 Windows amd64 `exe`。Windows 版本已做 CI 启动冒烟测试，但托盘入口和 `cloudflared` 自动安装仍未做完整 Windows 体验适配。
 
 ## 当前能力
 
@@ -22,10 +24,16 @@
 
 应用也支持 Global API Key。使用 Global API Key 时必须同时填写 Cloudflare 账号邮箱，应用会改用 `X-Auth-Email` 和 `X-Auth-Key` 请求头；如果把 Global API Key 当作 API Token 使用，会得到 `9109 Invalid access token`。
 
-应用会把认证凭据和 Tunnel Token 明文写入配置文件，macOS 通常是：
+应用会把认证凭据和 Tunnel Token 明文写入配置文件。macOS 通常是：
 
 ```text
 ~/Library/Application Support/CloudflareTunnelDesktop/config.json
+```
+
+Windows 通常是：
+
+```text
+C:\Users\<用户名>\AppData\Roaming\CloudflareTunnelDesktop\config.json
 ```
 
 截图里的“用户 API 令牌”是推荐使用的 API Token；下面“API 密钥”里的 Global API Key 也能用，但权限更大，使用时请选择认证方式为 `Global API Key` 并填写账号邮箱。
@@ -74,9 +82,9 @@ open build/bin/cloudflare-tunnel-desktop.app
 
 只运行应用时需要：
 
-- macOS 电脑。
-- `cloudflared` CLI，确保 `cloudflared --version` 可执行。
-- 构建好的 `cloudflare-tunnel-desktop` 二进制或 `.app`。
+- macOS 或 Windows 电脑。
+- `cloudflared` CLI，确保 `cloudflared --version` 可执行。当前自动安装只支持 macOS，Windows 需要手动安装 `cloudflared.exe` 并加入 `PATH`。
+- 构建好的 `cloudflare-tunnel-desktop` 二进制、`.app`、`.dmg` 或 `.exe`。
 - Cloudflare API Token，或 Global API Key + Cloudflare 账号邮箱。API Token 权限至少包含目标账号的 Tunnel Read/Write 和目标 Zone 的 Zone Read、DNS Read/Write。
 
 如果要在新电脑上从源码开发或重新构建，还需要：
@@ -89,14 +97,59 @@ open build/bin/cloudflare-tunnel-desktop.app
 ## 验证
 
 ```bash
-go test ./...
 cd frontend && npm run build
+cd ..
+go test ./...
 ```
 
-生产构建：
+macOS 本机生产构建：
 
 ```bash
 ~/go/bin/wails build
+```
+
+Windows amd64 交叉构建：
+
+```bash
+~/go/bin/wails build -platform windows/amd64 -clean -nosyncgomod
+file build/bin/cloudflare-tunnel-desktop.exe
+```
+
+macOS dmg 可在构建出 `.app` 后创建：
+
+```bash
+mkdir -p dist
+hdiutil create \
+  -volname "Cloudflare Tunnel Desktop" \
+  -srcfolder build/bin/cloudflare-tunnel-desktop.app \
+  -ov \
+  -format UDZO \
+  dist/cloudflare-tunnel-desktop-macos-arm64.dmg
+hdiutil verify dist/cloudflare-tunnel-desktop-macos-arm64.dmg
+```
+
+Windows exe 的真实运行校验需要在 Windows 实机、虚拟机或 GitHub Actions Windows runner 上执行。CI 中会验证 exe 文件头，并启动应用保持 10 秒，避免只检查到“能编译”。
+
+## GitHub Actions 发布
+
+仓库内置 `.github/workflows/release.yml`：
+
+- push 到 `main` 或发起 PR 时，自动构建 macOS dmg 和 Windows exe，并运行 Go 测试。
+- Windows job 会验证 exe 是 PE 可执行文件，并做启动冒烟测试。
+- macOS job 会构建 `.app`、生成 dmg，并执行 `hdiutil verify`。
+- tag 以 `v` 开头时会自动发布 GitHub Release。
+- 也可以在 Actions 页面手动运行 `Build and Release`，设置 `publish=true` 并填写 `release_tag`，例如 `v0.1.1`。
+
+发布产物包括：
+
+- `cloudflare-tunnel-desktop-macos-arm64.dmg`
+- `cloudflare-tunnel-desktop-windows-amd64.exe`
+- `SHA256SUMS.txt`
+
+最新已验证发布版本是：
+
+```text
+https://github.com/18230/cloudflare-tunnel-desktop/releases/tag/v0.1.1
 ```
 
 如果 macOS codesign 报 `resource fork, Finder information, or similar detritus not allowed`，清理构建产物扩展属性后再验签：
