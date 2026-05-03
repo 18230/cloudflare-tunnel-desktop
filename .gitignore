@@ -1,5 +1,6 @@
 build/bin
 build/dmg-*
+dist
 node_modules
 frontend/dist
 frontend/package.json.md5
