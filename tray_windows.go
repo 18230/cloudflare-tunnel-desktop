@@ -37,6 +37,7 @@ const (
 	idiApplication     = 32512
 
 	mfString    = 0x00000000
+	mfDisabled  = 0x00000002
 	mfSeparator = 0x00000800
 
 	tpmRightButton = 0x0002
@@ -55,6 +56,7 @@ var (
 	windowsShell32  = syscall.NewLazyDLL("shell32.dll")
 
 	procGetModuleHandleW = windowsKernel32.NewProc("GetModuleHandleW")
+	procGetModuleFileW   = windowsKernel32.NewProc("GetModuleFileNameW")
 	procRegisterClassExW = windowsUser32.NewProc("RegisterClassExW")
 	procCreateWindowExW  = windowsUser32.NewProc("CreateWindowExW")
 	procDefWindowProcW   = windowsUser32.NewProc("DefWindowProcW")
@@ -71,6 +73,7 @@ var (
 	procAppendMenuW      = windowsUser32.NewProc("AppendMenuW")
 	procTrackPopupMenu   = windowsUser32.NewProc("TrackPopupMenu")
 	procDestroyMenu      = windowsUser32.NewProc("DestroyMenu")
+	procExtractIconW     = windowsShell32.NewProc("ExtractIconW")
 	procShellNotifyIconW = windowsShell32.NewProc("Shell_NotifyIconW")
 )
 
@@ -211,18 +214,30 @@ func addWindowsTrayIcon(hwnd uintptr) bool {
 
 // newWindowsNotifyIconData 生成 Shell_NotifyIcon 使用的固定结构体。
 func newWindowsNotifyIconData(hwnd uintptr) windowsNotifyIconData {
-	hIcon, _, _ := procLoadIconW.Call(0, uintptr(idiApplication))
 	nid := windowsNotifyIconData{
 		CbSize:           uint32(unsafe.Sizeof(windowsNotifyIconData{})),
 		HWnd:             hwnd,
 		UID:              windowsTrayID,
 		UFlags:           nifMessage | nifIcon | nifTip,
 		UCallbackMessage: windowsTrayCallbackMessage,
-		HIcon:            hIcon,
+		HIcon:            loadWindowsTrayIcon(),
 	}
 	tip, _ := syscall.UTF16FromString("Cloudflare Tunnel Desktop")
 	copy(nid.SzTip[:], tip)
 	return nid
+}
+
+// loadWindowsTrayIcon 从当前 exe 提取应用图标，使托盘图标和 Windows 应用图标保持一致。
+func loadWindowsTrayIcon() uintptr {
+	var exePath [260]uint16
+	length, _, _ := procGetModuleFileW.Call(0, uintptr(unsafe.Pointer(&exePath[0])), uintptr(len(exePath)))
+	if length > 0 {
+		if hIcon, _, _ := procExtractIconW.Call(0, uintptr(unsafe.Pointer(&exePath[0])), 0); hIcon > 1 {
+			return hIcon
+		}
+	}
+	hIcon, _, _ := procLoadIconW.Call(0, uintptr(idiApplication))
+	return hIcon
 }
 
 // windowsTrayWndProc 处理托盘点击和菜单命令。
@@ -231,7 +246,7 @@ func windowsTrayWndProc(hwnd uintptr, msg uint32, wparam uintptr, lparam uintptr
 	case windowsTrayCallbackMessage:
 		switch uint32(lparam) {
 		case wmLButtonUp, wmLButtonDblClk:
-			windowsTrayShowMainWindow()
+			showWindowsTrayMenu(hwnd)
 			return 0
 		case wmRButtonUp, wmContextMenu:
 			showWindowsTrayMenu(hwnd)
@@ -259,6 +274,8 @@ func showWindowsTrayMenu(hwnd uintptr) {
 	if menu == 0 {
 		return
 	}
+	appendWindowsTrayMenu(menu, mfString|mfDisabled, 0, "Cloudflare Tunnel Desktop")
+	appendWindowsTrayMenu(menu, mfSeparator, 0, "")
 	appendWindowsTrayMenu(menu, mfString, windowsTrayMenuShow, "显示主窗口")
 	appendWindowsTrayMenu(menu, mfString, windowsTrayMenuHide, "隐藏主窗口")
 	appendWindowsTrayMenu(menu, mfSeparator, 0, "")
