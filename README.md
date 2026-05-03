@@ -17,6 +17,20 @@
 - 监听 cloudflared 日志，标记 1033、连接、DNS、鉴权相关事件。
 - 网络变化、进程异常退出、Tunnel down/degraded 时按退避策略尝试恢复。
 
+## UI 预览
+
+基础配置：
+
+![基础配置](docs/images/ui-basic-configuration.png)
+
+Tunnel 管理：
+
+![Tunnel 管理](docs/images/ui-tunnel-management.png)
+
+域名映射：
+
+![域名映射](docs/images/ui-domain-routes.png)
+
 ## Cloudflare 认证
 
 建议创建只限制到目标 Account 和 Zone 的 API Token：
