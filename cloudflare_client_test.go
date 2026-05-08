@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestCloudflareClientCreatesTunnelWithBearerToken(t *testing.T) {
+func TestCloudflareClientCreatesTunnelWithGlobalKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/accounts/0123456789abcdef0123456789abcdef/cfd_tunnel" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -17,8 +17,14 @@ func TestCloudflareClientCreatesTunnelWithBearerToken(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("unexpected method: %s", r.Method)
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer api-token" {
-			t.Fatalf("unexpected auth header: %s", got)
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("global key request should not use bearer auth: %s", got)
+		}
+		if got := r.Header.Get("X-Auth-Email"); got != "owner@example.com" {
+			t.Fatalf("unexpected auth email: %s", got)
+		}
+		if got := r.Header.Get("X-Auth-Key"); got != "global-key" {
+			t.Fatalf("unexpected auth key: %s", got)
 		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -35,7 +41,7 @@ func TestCloudflareClientCreatesTunnelWithBearerToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewCloudflareClientWithBaseURL(server.URL, "api-token")
+	client := NewCloudflareClientWithBaseURL(server.URL, "owner@example.com", "global-key")
 	tunnel, err := client.CreateTunnel(context.Background(), "0123456789abcdef0123456789abcdef", "desktop")
 	if err != nil {
 		t.Fatalf("CreateTunnel returned error: %v", err)
@@ -102,7 +108,7 @@ func TestCloudflareClientPutTunnelConfigurationAddsCatchAll(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewCloudflareClientWithBaseURL(server.URL, "api-token")
+	client := NewCloudflareClientWithBaseURL(server.URL, "owner@example.com", "global-key")
 	err := client.PutTunnelConfiguration(context.Background(), "0123456789abcdef0123456789abcdef", "11111111-2222-3333-4444-555555555555", []Route{{
 		Hostname:        "app.example.com",
 		ServiceProtocol: "http",
@@ -136,7 +142,7 @@ func TestCloudflareClientGetTunnelConfiguration(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewCloudflareClientWithBaseURL(server.URL, "api-token")
+	client := NewCloudflareClientWithBaseURL(server.URL, "owner@example.com", "global-key")
 	config, err := client.GetTunnelConfiguration(context.Background(), "0123456789abcdef0123456789abcdef", "11111111-2222-3333-4444-555555555555")
 	if err != nil {
 		t.Fatalf("GetTunnelConfiguration returned error: %v", err)
@@ -178,7 +184,7 @@ func TestCloudflareClientEnsureDNSRecordCreatesCNAME(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewCloudflareClientWithBaseURL(server.URL, "api-token")
+	client := NewCloudflareClientWithBaseURL(server.URL, "owner@example.com", "global-key")
 	record, err := client.EnsureTunnelDNSRecord(context.Background(), "abcdef0123456789abcdef0123456789", "11111111-2222-3333-4444-555555555555", "app.example.com")
 	if err != nil {
 		t.Fatalf("EnsureTunnelDNSRecord returned error: %v", err)
@@ -212,7 +218,7 @@ func TestCloudflareClientListTunnelDNSRecordsFiltersTarget(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewCloudflareClientWithBaseURL(server.URL, "api-token")
+	client := NewCloudflareClientWithBaseURL(server.URL, "owner@example.com", "global-key")
 	records, err := client.ListTunnelDNSRecords(context.Background(), "abcdef0123456789abcdef0123456789", "11111111-2222-3333-4444-555555555555")
 	if err != nil {
 		t.Fatalf("ListTunnelDNSRecords returned error: %v", err)
@@ -249,7 +255,7 @@ func TestCloudflareClientDeleteTunnelDNSRecordsDeletesOnlyTargetRecords(t *testi
 	}))
 	defer server.Close()
 
-	client := NewCloudflareClientWithBaseURL(server.URL, "api-token")
+	client := NewCloudflareClientWithBaseURL(server.URL, "owner@example.com", "global-key")
 	deleted, err := client.DeleteTunnelDNSRecords(context.Background(), "abcdef0123456789abcdef0123456789", "11111111-2222-3333-4444-555555555555")
 	if err != nil {
 		t.Fatalf("DeleteTunnelDNSRecords returned error: %v", err)
@@ -276,7 +282,7 @@ func TestCloudflareClientGetZone(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewCloudflareClientWithBaseURL(server.URL, "api-token")
+	client := NewCloudflareClientWithBaseURL(server.URL, "owner@example.com", "global-key")
 	zone, err := client.GetZone(context.Background(), "abcdef0123456789abcdef0123456789")
 	if err != nil {
 		t.Fatalf("GetZone returned error: %v", err)
@@ -308,7 +314,7 @@ func TestCloudflareClientListAndDeleteTunnels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewCloudflareClientWithBaseURL(server.URL, "api-token")
+	client := NewCloudflareClientWithBaseURL(server.URL, "owner@example.com", "global-key")
 	tunnels, err := client.ListTunnels(context.Background(), "0123456789abcdef0123456789abcdef")
 	if err != nil {
 		t.Fatalf("ListTunnels returned error: %v", err)
@@ -340,13 +346,42 @@ func TestCloudflareClientListZonesFiltersByAccount(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewCloudflareClientWithBaseURL(server.URL, "api-token")
+	client := NewCloudflareClientWithBaseURL(server.URL, "owner@example.com", "global-key")
 	zones, err := client.ListZones(context.Background(), "0123456789abcdef0123456789abcdef")
 	if err != nil {
 		t.Fatalf("ListZones returned error: %v", err)
 	}
 	if len(zones) != 1 || zones[0].Name != "example.com" {
 		t.Fatalf("unexpected zones: %#v", zones)
+	}
+}
+
+func TestCloudflareClientListAccounts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/accounts" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("per_page") != "50" {
+			t.Fatalf("missing pagination query: %s", r.URL.RawQuery)
+		}
+		writeCloudflareResult(w, []CloudflareAccount{{
+			ID:   "0123456789abcdef0123456789abcdef",
+			Name: "Personal",
+		}})
+	}))
+	defer server.Close()
+
+	client := NewCloudflareClientWithBaseURLAndAuth(server.URL, CloudflareAuth{
+		Type:  authTypeGlobalKey,
+		Email: "owner@example.com",
+		Key:   "global-key",
+	})
+	accounts, err := client.ListAccounts(context.Background())
+	if err != nil {
+		t.Fatalf("ListAccounts returned error: %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].Name != "Personal" {
+		t.Fatalf("unexpected accounts: %#v", accounts)
 	}
 }
 

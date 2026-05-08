@@ -4,6 +4,8 @@ import {main} from '../models';
 
 export function AddRoute(arg1:main.RouteInput):Promise<main.AppConfig>;
 
+export function AutoDiscoverCloudflare():Promise<main.CloudflareDiscoveryResult>;
+
 export function BindTunnel(arg1:main.CloudflareTunnel):Promise<main.AppConfig>;
 
 export function CreateTunnel(arg1:string):Promise<main.AppConfig>;

@@ -69,25 +69,26 @@ type tunnelIngressRule struct {
 	OriginRequest map[string]any `json:"originRequest,omitempty"`
 }
 
-// NewCloudflareClient 创建指向 Cloudflare 官方 API 的客户端。
-func NewCloudflareClient(apiToken string) *CloudflareClient {
-	return NewCloudflareClientWithBaseURL(cloudflareAPIBaseURL, apiToken)
+// NewCloudflareClient 创建指向 Cloudflare 官方 API 的客户端；email 和 globalKey 来自 Global API Key 页面。
+func NewCloudflareClient(email string, globalKey string) *CloudflareClient {
+	return NewCloudflareClientWithBaseURL(cloudflareAPIBaseURL, email, globalKey)
 }
 
 // NewCloudflareClientWithBaseURL 创建可指定 API 地址的客户端，测试中用于 httptest。
-func NewCloudflareClientWithBaseURL(baseURL string, apiToken string) *CloudflareClient {
+func NewCloudflareClientWithBaseURL(baseURL string, email string, globalKey string) *CloudflareClient {
 	return NewCloudflareClientWithBaseURLAndAuth(baseURL, CloudflareAuth{
-		Type: authTypeAPIToken,
-		Key:  apiToken,
+		Type:  authTypeGlobalKey,
+		Email: email,
+		Key:   globalKey,
 	})
 }
 
-// NewCloudflareClientWithAuth 创建支持 API Token 或 Global API Key 的客户端。
+// NewCloudflareClientWithAuth 创建使用 Global API Key 的客户端。
 func NewCloudflareClientWithAuth(auth CloudflareAuth) *CloudflareClient {
 	return NewCloudflareClientWithBaseURLAndAuth(cloudflareAPIBaseURL, auth)
 }
 
-// NewCloudflareClientWithBaseURLAndAuth 创建可指定 API 地址和认证方式的客户端。
+// NewCloudflareClientWithBaseURLAndAuth 创建可指定 API 地址和 Global API Key 的客户端。
 func NewCloudflareClientWithBaseURLAndAuth(baseURL string, auth CloudflareAuth) *CloudflareClient {
 	auth.Type = NormalizeAuthType(auth.Type)
 	auth.Email = strings.TrimSpace(auth.Email)
@@ -156,6 +157,31 @@ func (c *CloudflareClient) GetTunnel(ctx context.Context, accountID string, tunn
 	var tunnel CloudflareTunnel
 	err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/accounts/%s/cfd_tunnel/%s", accountID, tunnelID), nil, nil, &tunnel)
 	return tunnel, err
+}
+
+// ListAccounts 列出当前凭据可访问的 Cloudflare 账号。
+func (c *CloudflareClient) ListAccounts(ctx context.Context) ([]CloudflareAccount, error) {
+	accounts := []CloudflareAccount{}
+	page := 1
+	for {
+		query := url.Values{}
+		query.Set("per_page", "50")
+		query.Set("page", fmt.Sprintf("%d", page))
+		envelope, err := c.do(ctx, http.MethodGet, "/accounts", query, nil)
+		if err != nil {
+			return nil, err
+		}
+		var current []CloudflareAccount
+		if err := json.Unmarshal(envelope.Result, &current); err != nil {
+			return nil, fmt.Errorf("解析 Cloudflare Accounts 失败: %w", err)
+		}
+		accounts = append(accounts, current...)
+		if envelope.ResultInfo.TotalPages <= page || envelope.ResultInfo.TotalPages == 0 || len(current) == 0 {
+			break
+		}
+		page++
+	}
+	return accounts, nil
 }
 
 // GetZone 根据 Zone ID 获取根域名信息。
@@ -376,12 +402,8 @@ func (c *CloudflareClient) doJSON(ctx context.Context, method string, path strin
 
 // do 执行底层 HTTP 请求并统一处理 Cloudflare 错误响应。
 func (c *CloudflareClient) do(ctx context.Context, method string, path string, query url.Values, body any) (cloudflareAPIEnvelope, error) {
-	if c.auth.Type == authTypeGlobalKey {
-		if c.auth.Email == "" || c.auth.Key == "" {
-			return cloudflareAPIEnvelope{}, fmt.Errorf("请先输入 Cloudflare 邮箱和 Global API Key")
-		}
-	} else if c.auth.Key == "" {
-		return cloudflareAPIEnvelope{}, fmt.Errorf("请先输入 Cloudflare API Token")
+	if c.auth.Email == "" || c.auth.Key == "" {
+		return cloudflareAPIEnvelope{}, fmt.Errorf("请先输入 Cloudflare 邮箱和 Global API Key")
 	}
 	var reader io.Reader
 	if body != nil {
@@ -399,12 +421,8 @@ func (c *CloudflareClient) do(ctx context.Context, method string, path string, q
 	if err != nil {
 		return cloudflareAPIEnvelope{}, fmt.Errorf("创建 Cloudflare 请求失败: %w", err)
 	}
-	if c.auth.Type == authTypeGlobalKey {
-		req.Header.Set("X-Auth-Email", c.auth.Email)
-		req.Header.Set("X-Auth-Key", c.auth.Key)
-	} else {
-		req.Header.Set("Authorization", "Bearer "+c.auth.Key)
-	}
+	req.Header.Set("X-Auth-Email", c.auth.Email)
+	req.Header.Set("X-Auth-Key", c.auth.Key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 

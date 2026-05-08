@@ -5,13 +5,12 @@ import "time"
 const (
 	defaultProtocol    = "auto"
 	defaultServiceHost = "localhost"
-	defaultAuthType    = "api_token"
-	authTypeAPIToken   = "api_token"
+	defaultAuthType    = "global_key"
 	authTypeGlobalKey  = "global_key"
 	maxLogEntries      = 500
 )
 
-// AppConfig 保存本地配置；自用场景下 API Token 和 Tunnel Token 按用户要求明文留存。
+// AppConfig 保存本地配置；为兼容旧版本，Global API Key 仍沿用 apiToken 字段落盘。
 type AppConfig struct {
 	AccountID   string  `json:"accountId"`
 	ZoneID      string  `json:"zoneId"`
@@ -48,7 +47,7 @@ type SettingsInput struct {
 	AutoRestart bool   `json:"autoRestart"`
 }
 
-// CredentialsInput 接收需要保存到本地配置文件的 Cloudflare 凭据。
+// CredentialsInput 接收需要保存到本地配置文件的 Cloudflare Global API Key 凭据。
 type CredentialsInput struct {
 	AuthType    string `json:"authType"`
 	AuthEmail   string `json:"authEmail"`
@@ -150,7 +149,7 @@ type DNSRecord struct {
 	Proxied bool   `json:"proxied"`
 }
 
-// CloudflareAccount 映射 Cloudflare Zone 返回的账号信息。
+// CloudflareAccount 映射 Cloudflare API 返回的账号信息。
 type CloudflareAccount struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -162,6 +161,15 @@ type CloudflareZone struct {
 	Name    string            `json:"name"`
 	Status  string            `json:"status"`
 	Account CloudflareAccount `json:"account"`
+}
+
+// CloudflareDiscoveryResult 返回凭据自动发现出的账号、域名和 Tunnel 候选项。
+type CloudflareDiscoveryResult struct {
+	Config   AppConfig           `json:"config"`
+	Accounts []CloudflareAccount `json:"accounts"`
+	Zones    []CloudflareZone    `json:"zones"`
+	Tunnels  []CloudflareTunnel  `json:"tunnels"`
+	Messages []string            `json:"messages"`
 }
 
 // NewDefaultConfig 创建首版应用的默认配置。

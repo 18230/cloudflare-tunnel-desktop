@@ -27,7 +27,7 @@ type App struct {
 	config             AppConfig
 	authType           string
 	authEmail          string
-	apiToken           string
+	globalKey          string
 	tunnelToken        string
 	tunnelStatus       string
 	installStatus      CloudflaredInstallStatus
@@ -51,7 +51,7 @@ func NewApp() *App {
 		config:            config,
 		authType:          NormalizeAuthType(config.AuthType),
 		authEmail:         strings.TrimSpace(config.AuthEmail),
-		apiToken:          strings.TrimSpace(config.APIToken),
+		globalKey:         strings.TrimSpace(config.APIToken),
 		tunnelToken:       strings.TrimSpace(config.TunnelToken),
 		stopHealthMonitor: make(chan struct{}),
 	}
@@ -132,7 +132,7 @@ func (a *App) SaveSettings(input SettingsInput) (AppConfig, error) {
 	config.AutoRestart = normalized.AutoRestart
 	config.AuthType = a.authType
 	config.AuthEmail = a.authEmail
-	config.APIToken = a.apiToken
+	config.APIToken = a.globalKey
 	config.TunnelToken = a.tunnelToken
 	a.config = config
 	a.mu.Unlock()
@@ -145,16 +145,16 @@ func (a *App) SaveSettings(input SettingsInput) (AppConfig, error) {
 	return config, nil
 }
 
-// SetCredentials 将 API Token 和可选 Tunnel Token 明文保存到本地配置文件。
+// SetCredentials 将 Global API Key 和可选 Tunnel Token 明文保存到本地配置文件。
 func (a *App) SetCredentials(input CredentialsInput) (RuntimeStatus, error) {
 	a.mu.Lock()
 	a.authType = NormalizeAuthType(input.AuthType)
 	a.authEmail = strings.TrimSpace(input.AuthEmail)
-	a.apiToken = strings.TrimSpace(input.APIToken)
+	a.globalKey = strings.TrimSpace(input.APIToken)
 	a.tunnelToken = strings.TrimSpace(input.TunnelToken)
 	a.config.AuthType = a.authType
 	a.config.AuthEmail = a.authEmail
-	a.config.APIToken = a.apiToken
+	a.config.APIToken = a.globalKey
 	a.config.TunnelToken = a.tunnelToken
 	config := a.config
 	a.mu.Unlock()
@@ -163,6 +163,68 @@ func (a *App) SetCredentials(input CredentialsInput) (RuntimeStatus, error) {
 	}
 	a.manager.addLog("info", "auth", "凭据已保存到本地配置文件", "auth")
 	return a.GetStatus(), nil
+}
+
+// AutoDiscoverCloudflare 基于已保存凭据自动发现账号、根域名和 Tunnel 候选项。
+func (a *App) AutoDiscoverCloudflare() (CloudflareDiscoveryResult, error) {
+	a.mu.Lock()
+	config := a.config
+	auth := a.currentCloudflareAuthLocked()
+	a.mu.Unlock()
+	if err := validateCloudflareAuth(auth); err != nil {
+		return CloudflareDiscoveryResult{}, err
+	}
+	if strings.TrimSpace(config.AccountID) != "" && !cloudflareIDPattern.MatchString(config.AccountID) {
+		return CloudflareDiscoveryResult{}, fmt.Errorf("Account ID 必须是 32 位十六进制字符串")
+	}
+	if strings.TrimSpace(config.ZoneID) != "" && !cloudflareIDPattern.MatchString(config.ZoneID) {
+		return CloudflareDiscoveryResult{}, fmt.Errorf("Zone ID 必须是 32 位十六进制字符串")
+	}
+
+	client := NewCloudflareClientWithAuth(auth)
+	result := CloudflareDiscoveryResult{Config: config, Messages: []string{}}
+
+	accounts, accountErr := client.ListAccounts(context.Background())
+	if accountErr == nil {
+		result.Accounts = accounts
+	} else {
+		return CloudflareDiscoveryResult{}, accountErr
+	}
+
+	zones, err := discoverZones(context.Background(), client, config)
+	if err != nil {
+		return CloudflareDiscoveryResult{}, err
+	}
+	result.Zones = zones
+	if len(result.Accounts) == 0 {
+		result.Accounts = accountsFromZones(zones)
+	}
+
+	config, result.Messages = applyDiscoveredZone(config, zones, result.Accounts, result.Messages)
+	result.Config = config
+	if cloudflareIDPattern.MatchString(config.AccountID) {
+		tunnels, tunnelErr := client.ListTunnels(context.Background(), config.AccountID)
+		if tunnelErr != nil {
+			result.Messages = append(result.Messages, "读取 Tunnel 列表失败: "+tunnelErr.Error())
+		} else {
+			result.Tunnels = tunnels
+			config, result.Messages = applyDiscoveredTunnel(context.Background(), client, config, tunnels, result.Messages)
+			result.Config = config
+		}
+	}
+
+	a.mu.Lock()
+	a.config = config
+	a.authType = config.AuthType
+	a.authEmail = config.AuthEmail
+	a.globalKey = config.APIToken
+	a.tunnelToken = config.TunnelToken
+	a.mu.Unlock()
+	if err := a.store.Save(config); err != nil {
+		return CloudflareDiscoveryResult{}, err
+	}
+	a.manager.addLog("info", "cloudflare", "已完成 Cloudflare 资源自动发现", "api")
+	return result, nil
 }
 
 // CreateTunnel 通过 Cloudflare API 创建远程管理 Tunnel 并保存 Tunnel ID。
@@ -199,7 +261,7 @@ func (a *App) CreateTunnel(name string) (AppConfig, error) {
 	}
 	a.config.AuthType = a.authType
 	a.config.AuthEmail = a.authEmail
-	a.config.APIToken = a.apiToken
+	a.config.APIToken = a.globalKey
 	config = a.config
 	a.mu.Unlock()
 	if err := a.store.Save(config); err != nil {
@@ -312,17 +374,14 @@ func (a *App) DeleteTunnel(tunnelID string, deleteDNS bool) (AppConfig, error) {
 	return config, nil
 }
 
-// FetchZones 根据当前 API Token、Zone ID 或 Account ID 获取可选根域名。
+// FetchZones 根据当前 Global API Key、Zone ID 或 Account ID 获取可选根域名。
 func (a *App) FetchZones() ([]CloudflareZone, error) {
 	a.mu.Lock()
 	config := a.config
 	auth := a.currentCloudflareAuthLocked()
 	a.mu.Unlock()
-	if auth.Type == authTypeGlobalKey && (auth.Email == "" || auth.Key == "") {
+	if auth.Email == "" || auth.Key == "" {
 		return nil, fmt.Errorf("请先在本地凭据中输入 Cloudflare 邮箱和 Global API Key")
-	}
-	if auth.Type == authTypeAPIToken && auth.Key == "" {
-		return nil, fmt.Errorf("请先在本地凭据中输入 Cloudflare API Token")
 	}
 	client := NewCloudflareClientWithAuth(auth)
 	if strings.TrimSpace(config.ZoneID) != "" {
@@ -344,7 +403,7 @@ func (a *App) FetchZones() ([]CloudflareZone, error) {
 		return nil, err
 	}
 	if len(zones) == 0 {
-		return nil, fmt.Errorf("没有获取到可用根域名，请确认 API Token 具备 Zone Read 权限")
+		return nil, fmt.Errorf("没有获取到可用根域名，请确认 Global API Key 可访问该 Zone")
 	}
 	a.manager.addLog("info", "cloudflare", fmt.Sprintf("已获取 %d 个根域名", len(zones)), "api")
 	return zones, nil
@@ -788,7 +847,7 @@ func (a *App) GetStatus() RuntimeStatus {
 	defer a.mu.Unlock()
 	managerStatus.Configured = a.config.AccountID != "" && a.config.ZoneID != "" && a.config.RootDomain != ""
 	managerStatus.AuthType = NormalizeAuthType(a.authType)
-	managerStatus.APITokenSet = strings.TrimSpace(a.apiToken) != ""
+	managerStatus.APITokenSet = strings.TrimSpace(a.globalKey) != ""
 	managerStatus.TunnelTokenSet = strings.TrimSpace(a.tunnelToken) != ""
 	managerStatus.Protocol = a.config.Protocol
 	managerStatus.TunnelStatus = a.tunnelStatus
@@ -1062,12 +1121,162 @@ func (a *App) resolveTunnelToken(config AppConfig) (string, error) {
 	return token, nil
 }
 
+// validateCloudflareAuth 校验 Cloudflare API 调用所需的认证字段。
+func validateCloudflareAuth(auth CloudflareAuth) error {
+	if strings.TrimSpace(auth.Email) == "" || strings.TrimSpace(auth.Key) == "" {
+		return fmt.Errorf("请先在本地凭据中输入 Cloudflare 邮箱和 Global API Key")
+	}
+	return nil
+}
+
+// discoverZones 根据已有 Zone ID 或 Account ID 读取可选根域名。
+func discoverZones(ctx context.Context, client *CloudflareClient, config AppConfig) ([]CloudflareZone, error) {
+	if strings.TrimSpace(config.ZoneID) != "" {
+		zone, err := client.GetZone(ctx, config.ZoneID)
+		if err != nil {
+			return nil, err
+		}
+		return []CloudflareZone{zone}, nil
+	}
+	zones, err := client.ListZones(ctx, config.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	if len(zones) == 0 {
+		return nil, fmt.Errorf("没有获取到可用根域名，请确认凭据具备 Zone Read 权限")
+	}
+	return zones, nil
+}
+
+// accountsFromZones 从 Zone 响应中提取账号候选，用于账号列表不可用时回填 Account ID。
+func accountsFromZones(zones []CloudflareZone) []CloudflareAccount {
+	seen := map[string]CloudflareAccount{}
+	for _, zone := range zones {
+		if !cloudflareIDPattern.MatchString(zone.Account.ID) {
+			continue
+		}
+		seen[zone.Account.ID] = zone.Account
+	}
+	accounts := make([]CloudflareAccount, 0, len(seen))
+	for _, account := range seen {
+		accounts = append(accounts, account)
+	}
+	sort.Slice(accounts, func(i, j int) bool {
+		return strings.ToLower(accounts[i].Name) < strings.ToLower(accounts[j].Name)
+	})
+	return accounts
+}
+
+// applyDiscoveredZone 在候选唯一或可精确匹配时自动回填账号和根域名。
+func applyDiscoveredZone(config AppConfig, zones []CloudflareZone, accounts []CloudflareAccount, messages []string) (AppConfig, []string) {
+	if strings.TrimSpace(config.AccountID) == "" && len(accounts) == 1 {
+		config.AccountID = accounts[0].ID
+		messages = append(messages, "已自动填入唯一 Account")
+	}
+	if strings.TrimSpace(config.ZoneID) == "" {
+		candidates := zones
+		if cloudflareIDPattern.MatchString(config.AccountID) {
+			candidates = filterZonesByAccount(zones, config.AccountID)
+		}
+		if config.RootDomain != "" {
+			if zone, ok := findZoneByName(candidates, config.RootDomain); ok {
+				config.ZoneID = zone.ID
+				config.RootDomain = zone.Name
+				if strings.TrimSpace(config.AccountID) == "" && cloudflareIDPattern.MatchString(zone.Account.ID) {
+					config.AccountID = zone.Account.ID
+				}
+				messages = append(messages, "已按根域名匹配 Zone")
+			}
+		} else if len(candidates) == 1 {
+			config.ZoneID = candidates[0].ID
+			config.RootDomain = candidates[0].Name
+			if strings.TrimSpace(config.AccountID) == "" && cloudflareIDPattern.MatchString(candidates[0].Account.ID) {
+				config.AccountID = candidates[0].Account.ID
+			}
+			messages = append(messages, "已自动填入唯一根域名")
+		}
+	} else if strings.TrimSpace(config.RootDomain) == "" && len(zones) == 1 {
+		config.RootDomain = zones[0].Name
+		if strings.TrimSpace(config.AccountID) == "" && cloudflareIDPattern.MatchString(zones[0].Account.ID) {
+			config.AccountID = zones[0].Account.ID
+		}
+		messages = append(messages, "已通过 Zone ID 填入根域名")
+	}
+	return config, messages
+}
+
+// applyDiscoveredTunnel 在候选唯一或已有 Tunnel ID 匹配时补齐 Tunnel 信息和运行 token。
+func applyDiscoveredTunnel(ctx context.Context, client *CloudflareClient, config AppConfig, tunnels []CloudflareTunnel, messages []string) (AppConfig, []string) {
+	selected := CloudflareTunnel{}
+	if strings.TrimSpace(config.TunnelID) != "" {
+		for _, tunnel := range tunnels {
+			if tunnel.ID == config.TunnelID {
+				selected = tunnel
+				break
+			}
+		}
+		if selected.ID == "" {
+			config.TunnelID = ""
+			config.TunnelName = ""
+			config.TunnelToken = ""
+			messages = append(messages, "当前 Tunnel 不属于所选 Account，已清空 Tunnel 配置")
+		}
+	} else if len(tunnels) == 1 {
+		selected = tunnels[0]
+		config.TunnelID = selected.ID
+		config.TunnelName = selected.Name
+		messages = append(messages, "已自动填入唯一 Tunnel")
+	}
+	if selected.ID == "" {
+		if strings.TrimSpace(config.TunnelID) == "" {
+			config.TunnelName = ""
+			config.TunnelToken = ""
+		}
+		return config, messages
+	}
+	if strings.TrimSpace(config.TunnelName) == "" {
+		config.TunnelName = selected.Name
+	}
+	if strings.TrimSpace(config.TunnelToken) == "" {
+		token, err := client.GetTunnelToken(ctx, config.AccountID, selected.ID)
+		if err == nil {
+			config.TunnelToken = token
+			messages = append(messages, "已自动获取 Tunnel Token")
+		} else {
+			messages = append(messages, "获取 Tunnel Token 失败: "+err.Error())
+		}
+	}
+	return config, messages
+}
+
+// filterZonesByAccount 只保留指定账号下的 Zone。
+func filterZonesByAccount(zones []CloudflareZone, accountID string) []CloudflareZone {
+	filtered := []CloudflareZone{}
+	for _, zone := range zones {
+		if zone.Account.ID == accountID {
+			filtered = append(filtered, zone)
+		}
+	}
+	return filtered
+}
+
+// findZoneByName 按根域名精确查找 Zone。
+func findZoneByName(zones []CloudflareZone, rootDomain string) (CloudflareZone, bool) {
+	rootDomain = normalizeHostname(rootDomain)
+	for _, zone := range zones {
+		if normalizeHostname(zone.Name) == rootDomain {
+			return zone, true
+		}
+	}
+	return CloudflareZone{}, false
+}
+
 // currentCloudflareAuthLocked 基于当前配置生成 Cloudflare API 认证信息；调用方需持有 a.mu。
 func (a *App) currentCloudflareAuthLocked() CloudflareAuth {
 	return CloudflareAuth{
 		Type:  NormalizeAuthType(a.authType),
 		Email: strings.TrimSpace(a.authEmail),
-		Key:   strings.TrimSpace(a.apiToken),
+		Key:   strings.TrimSpace(a.globalKey),
 	}
 }
 

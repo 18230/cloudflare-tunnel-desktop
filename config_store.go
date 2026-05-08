@@ -50,7 +50,7 @@ func (s *ConfigStore) Load() (AppConfig, error) {
 	return config, nil
 }
 
-// Save 校验并写入本地配置，API Token 和 Tunnel Token 按用户要求明文保存。
+// Save 校验并写入本地配置，Global API Key 和 Tunnel Token 按用户要求明文保存。
 func (s *ConfigStore) Save(config AppConfig) error {
 	config.Protocol = normalizeProtocol(config.Protocol)
 	config.AuthType = NormalizeAuthType(config.AuthType)

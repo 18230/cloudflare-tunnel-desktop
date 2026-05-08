@@ -6,6 +6,10 @@ export function AddRoute(arg1) {
   return window['go']['main']['App']['AddRoute'](arg1);
 }
 
+export function AutoDiscoverCloudflare() {
+  return window['go']['main']['App']['AutoDiscoverCloudflare']();
+}
+
 export function BindTunnel(arg1) {
   return window['go']['main']['App']['BindTunnel'](arg1);
 }

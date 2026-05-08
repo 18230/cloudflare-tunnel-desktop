@@ -16,7 +16,7 @@ func TestConfigStorePersistsPlaintextCredentials(t *testing.T) {
 	config.RootDomain = "example.com"
 	config.TunnelID = "11111111-2222-3333-4444-555555555555"
 	config.TunnelName = "desktop"
-	config.APIToken = "plain-api-token"
+	config.APIToken = "plain-global-key"
 	config.TunnelToken = "plain-tunnel-token"
 
 	if err := store.Save(config); err != nil {
@@ -27,7 +27,7 @@ func TestConfigStorePersistsPlaintextCredentials(t *testing.T) {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
 	content := string(data)
-	for _, expected := range []string{"plain-api-token", "plain-tunnel-token"} {
+	for _, expected := range []string{"plain-global-key", "plain-tunnel-token"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config should contain %q: %s", expected, content)
 		}

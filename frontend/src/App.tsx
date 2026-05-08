@@ -20,6 +20,7 @@ import {
 import './App.css';
 import {
     AddRoute,
+    AutoDiscoverCloudflare,
     BindTunnel,
     CreateTunnel,
     DeleteTunnel,
@@ -119,12 +120,25 @@ type CloudflareZone = {
     };
 };
 
+type CloudflareAccount = {
+    id: string;
+    name: string;
+};
+
 type CloudflareTunnel = {
     id: string;
     name: string;
     status: string;
     token: string;
     conns_active_at: string;
+};
+
+type CloudflareDiscoveryResult = {
+    config: AppConfig;
+    accounts: CloudflareAccount[];
+    zones: CloudflareZone[];
+    tunnels: CloudflareTunnel[];
+    messages: string[];
 };
 
 const defaultConfig: AppConfig = {
@@ -135,7 +149,7 @@ const defaultConfig: AppConfig = {
     tunnelName: '',
     protocol: 'auto',
     autoRestart: true,
-    authType: 'api_token',
+    authType: 'global_key',
     authEmail: '',
     apiToken: '',
     tunnelToken: '',
@@ -144,7 +158,7 @@ const defaultConfig: AppConfig = {
 
 const defaultStatus: RuntimeStatus = {
     configured: false,
-    authType: 'api_token',
+    authType: 'global_key',
     apiTokenSet: false,
     tunnelTokenSet: false,
     cloudflaredPath: '',
@@ -183,7 +197,7 @@ const blankRoute: RouteFormState = {
 
 const helpLinks = {
     accountAndZone: 'https://developers.cloudflare.com/fundamentals/setup/find-account-and-zone-ids/',
-    apiToken: 'https://dash.cloudflare.com/profile/api-tokens',
+    globalKey: 'https://dash.cloudflare.com/profile/api-tokens',
     tunnelList: 'https://one.dash.cloudflare.com/?to=/:account/networks/tunnels',
     tunnelToken: 'https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/',
     tunnelSetup: 'https://developers.cloudflare.com/tunnel/setup/',
@@ -193,11 +207,12 @@ const helpLinks = {
 function App() {
     const [config, setConfig] = useState<AppConfig>(defaultConfig);
     const [settings, setSettings] = useState<AppConfig>(defaultConfig);
-    const [credentials, setCredentials] = useState({authType: 'api_token', authEmail: '', apiToken: '', tunnelToken: ''});
+    const [credentials, setCredentials] = useState({authType: 'global_key', authEmail: '', apiToken: '', tunnelToken: ''});
     const [routeForm, setRouteForm] = useState<RouteFormState>(blankRoute);
     const [status, setStatus] = useState<RuntimeStatus>(defaultStatus);
     const [installStatus, setInstallStatus] = useState<CloudflaredInstallStatus>(defaultInstallStatus);
     const [logs, setLogs] = useState<LogEntry[]>([]);
+    const [availableAccounts, setAvailableAccounts] = useState<CloudflareAccount[]>([]);
     const [availableZones, setAvailableZones] = useState<CloudflareZone[]>([]);
     const [availableTunnels, setAvailableTunnels] = useState<CloudflareTunnel[]>([]);
     const [deleteTunnelId, setDeleteTunnelId] = useState('');
@@ -246,7 +261,7 @@ function App() {
             setSettings(loaded);
             setSelectedRouteTunnelId(loaded.tunnelId || '');
             setCredentials({
-                authType: loaded.authType || 'api_token',
+                authType: 'global_key',
                 authEmail: loaded.authEmail || '',
                 apiToken: loaded.apiToken || '',
                 tunnelToken: loaded.tunnelToken || '',
@@ -311,24 +326,70 @@ function App() {
     async function handleCredentials(event: FormEvent) {
         event.preventDefault();
         await withBusy('credentials', async () => {
-            const nextStatus = await SetCredentials(credentials);
+            const nextCredentials = {...credentials, authType: 'global_key'};
+            const nextStatus = await SetCredentials(nextCredentials);
             setStatus(nextStatus);
             setConfig({
                 ...config,
-                authType: credentials.authType,
-                authEmail: credentials.authEmail,
-                apiToken: credentials.apiToken,
-                tunnelToken: credentials.tunnelToken,
+                authType: nextCredentials.authType,
+                authEmail: nextCredentials.authEmail,
+                apiToken: nextCredentials.apiToken,
+                tunnelToken: nextCredentials.tunnelToken,
             });
             setSettings({
                 ...settings,
-                authType: credentials.authType,
-                authEmail: credentials.authEmail,
-                apiToken: credentials.apiToken,
-                tunnelToken: credentials.tunnelToken,
+                authType: nextCredentials.authType,
+                authEmail: nextCredentials.authEmail,
+                apiToken: nextCredentials.apiToken,
+                tunnelToken: nextCredentials.tunnelToken,
             });
-            setMessage('凭据已明文保存到本地配置文件');
+            try {
+                const discovery = await AutoDiscoverCloudflare();
+                applyDiscovery(discovery, '凭据已保存，并已自动获取 Cloudflare 资源');
+            } catch (error) {
+                await refreshLocalState();
+                const reason = error instanceof Error ? error.message : String(error);
+                throw new Error(`凭据已保存，但自动获取失败: ${reason}`);
+            }
         });
+    }
+
+    async function handleAutoDiscover() {
+        await withBusy('discover', async () => {
+            const saved = await SaveSettings({
+                accountId: settings.accountId,
+                zoneId: settings.zoneId,
+                rootDomain: settings.rootDomain,
+                tunnelId: settings.tunnelId,
+                tunnelName: settings.tunnelName,
+                protocol: settings.protocol,
+                autoRestart: settings.autoRestart,
+            });
+            setConfig(saved);
+            setSettings(saved);
+            const discovery = await AutoDiscoverCloudflare();
+            applyDiscovery(discovery, '已自动获取 Cloudflare 资源');
+        });
+    }
+
+    // applyDiscovery 统一落地自动发现结果，保证配置、候选列表和凭据展示同步。
+    function applyDiscovery(discovery: CloudflareDiscoveryResult, successPrefix: string) {
+        setConfig(discovery.config);
+        setSettings(discovery.config);
+        setAvailableAccounts(discovery.accounts || []);
+        setAvailableZones(discovery.zones || []);
+        setAvailableTunnels(discovery.tunnels || []);
+        setSelectedRouteTunnelId(discovery.config.tunnelId || '');
+        setCredentials((current) => ({
+            ...current,
+            authType: discovery.config.authType || current.authType,
+            authEmail: discovery.config.authEmail || current.authEmail,
+            apiToken: discovery.config.apiToken || current.apiToken,
+            tunnelToken: discovery.config.tunnelToken || '',
+        }));
+        void refreshLocalState();
+        const detail = discovery.messages.length > 0 ? `：${discovery.messages.join('；')}` : '';
+        setMessage(`${successPrefix}${detail}`);
     }
 
     async function handleCreateTunnel() {
@@ -376,6 +437,30 @@ function App() {
             }
             setMessage(`已获取 ${zones.length} 个根域名，请从下拉框选择`);
         });
+    }
+
+    async function applyAccount(account: CloudflareAccount) {
+        const nextSettings = {
+            ...settings,
+            accountId: account.id,
+            zoneId: '',
+            rootDomain: '',
+            tunnelId: '',
+            tunnelName: '',
+        };
+        setSettings(nextSettings);
+        const saved = await SaveSettings({
+            accountId: nextSettings.accountId,
+            zoneId: nextSettings.zoneId,
+            rootDomain: nextSettings.rootDomain,
+            tunnelId: nextSettings.tunnelId,
+            tunnelName: nextSettings.tunnelName,
+            protocol: nextSettings.protocol,
+            autoRestart: nextSettings.autoRestart,
+        });
+        setConfig(saved);
+        const discovery = await AutoDiscoverCloudflare();
+        applyDiscovery(discovery, `已选择 Account: ${account.name || account.id}`);
     }
 
     async function handleListTunnels(showMessage = true) {
@@ -438,6 +523,7 @@ function App() {
     async function applyZone(zone: CloudflareZone, baseSettings = settings, successMessage = '根域名已选择') {
         const nextSettings = {
             ...baseSettings,
+            accountId: zone.account?.id || baseSettings.accountId,
             zoneId: zone.id,
             rootDomain: zone.name,
         };
@@ -454,6 +540,16 @@ function App() {
         setConfig(saved);
         setSettings(saved);
         setMessage(`${successMessage}: ${zone.name}`);
+    }
+
+    async function selectTunnel(tunnel: CloudflareTunnel) {
+        const saved = await BindTunnel(tunnel);
+        setConfig(saved);
+        setSettings(saved);
+        setSelectedRouteTunnelId(tunnel.id);
+        setCredentials((current) => ({...current, tunnelToken: saved.tunnelToken || ''}));
+        await refreshLocalState();
+        setMessage(`已设为当前 Tunnel: ${tunnel.name || tunnel.id}`);
     }
 
     async function handleRouteSubmit(event: FormEvent) {
@@ -690,6 +786,29 @@ function App() {
                             </div>
                             <form className="form-grid" onSubmit={handleSaveSettings}>
                                 <TextInput label="Account ID" helpLabel="获取 Account ID" helpURL={helpLinks.accountAndZone} value={settings.accountId} onChange={(value) => setSettings({...settings, accountId: value})}/>
+                                <div className="zone-picker">
+                                    <button className="command" disabled={busy !== ''} type="button" onClick={handleAutoDiscover}>
+                                        <RefreshCw size={16}/>自动获取
+                                    </button>
+                                    {availableAccounts.length > 0 && (
+                                        <label className="field">
+                                            <span>选择 Account</span>
+                                            <select value={settings.accountId} onChange={(event) => {
+                                                const account = availableAccounts.find((item) => item.id === event.target.value);
+                                                if (account) {
+                                                    void withBusy('selectAccount', () => applyAccount(account));
+                                                }
+                                            }}>
+                                                <option value="">请选择</option>
+                                                {availableAccounts.map((account) => (
+                                                    <option value={account.id} key={account.id}>
+                                                        {account.name || account.id}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                    )}
+                                </div>
                                 <TextInput label="Zone ID" helpLabel="获取 Zone ID" helpURL={helpLinks.accountAndZone} value={settings.zoneId} onChange={(value) => setSettings({...settings, zoneId: value})}/>
                                 <TextInput label="根域名" helpLabel="查看域名概览" helpURL={helpLinks.accountAndZone} value={settings.rootDomain} placeholder="example.com" onChange={(value) => setSettings({...settings, rootDomain: value})}/>
                                 <div className="zone-picker">
@@ -715,6 +834,27 @@ function App() {
                                         </label>
                                     )}
                                 </div>
+                                {availableTunnels.length > 0 && (
+                                    <div className="zone-picker">
+                                        <span/>
+                                        <label className="field">
+                                            <span>选择 Tunnel</span>
+                                            <select value={settings.tunnelId} onChange={(event) => {
+                                                const tunnel = availableTunnels.find((item) => item.id === event.target.value);
+                                                if (tunnel) {
+                                                    void withBusy('selectTunnel', () => selectTunnel(tunnel));
+                                                }
+                                            }}>
+                                                <option value="">请选择</option>
+                                                {availableTunnels.map((tunnel) => (
+                                                    <option value={tunnel.id} key={tunnel.id}>
+                                                        {tunnel.name || tunnel.id}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                    </div>
+                                )}
                                 <div className="field">
                                     <span className="field-header">
                                         <span>传输协议</span>
@@ -738,7 +878,7 @@ function App() {
                                 </div>
                                 <div className="inline-help">
                                     <HelpLink label="获取 Account ID / Zone ID" url={helpLinks.accountAndZone}/>
-                                    <HelpLink label="打开 API Token 页面" url={helpLinks.apiToken}/>
+                                    <HelpLink label="打开 API Keys 页面" url={helpLinks.globalKey}/>
                                 </div>
                             </form>
                         </section>
@@ -746,31 +886,22 @@ function App() {
                         <section className="panel">
                             <PanelTitle icon={<KeyRound size={18}/>} title="本地凭据"/>
                             <form className="form-grid single" onSubmit={handleCredentials}>
-                                <label className="field">
-                                    <span>认证方式</span>
-                                    <select value={credentials.authType} onChange={(event) => setCredentials({...credentials, authType: event.target.value})}>
-                                        <option value="api_token">API Token</option>
-                                        <option value="global_key">Global API Key</option>
-                                    </select>
-                                </label>
-                                {credentials.authType === 'global_key' && (
-                                    <TextInput label="Cloudflare 邮箱" value={credentials.authEmail} onChange={(value) => setCredentials({...credentials, authEmail: value})}/>
-                                )}
+                                <TextInput label="Cloudflare 邮箱" value={credentials.authEmail} onChange={(value) => setCredentials({...credentials, authType: 'global_key', authEmail: value})}/>
                                 <TextInput
-                                    label={credentials.authType === 'global_key' ? 'Global API Key' : 'Cloudflare API Token'}
-                                    helpLabel={credentials.authType === 'global_key' ? '打开 API Keys 页面' : '创建 API Token'}
-                                    helpURL={helpLinks.apiToken}
+                                    label="Global API Key"
+                                    helpLabel="打开 API Keys 页面"
+                                    helpURL={helpLinks.globalKey}
                                     value={credentials.apiToken}
-                                    onChange={(value) => setCredentials({...credentials, apiToken: value})}
+                                    onChange={(value) => setCredentials({...credentials, authType: 'global_key', apiToken: value})}
                                 />
                                 <div className="credential-state">
-                                    <span className={status.apiTokenSet ? 'ok' : ''}>{status.authType === 'global_key' ? 'Global API Key' : 'API Token'} {status.apiTokenSet ? '已保存' : '未保存'}</span>
+                                    <span className={status.apiTokenSet ? 'ok' : ''}>Global API Key {status.apiTokenSet ? '已保存' : '未保存'}</span>
                                 </div>
                                 <button className="command primary" disabled={busy !== ''} type="submit">
                                     <KeyRound size={16}/>保存凭据
                                 </button>
                                 <div className="inline-help">
-                                    <HelpLink label="打开 API Token 页面" url={helpLinks.apiToken}/>
+                                    <HelpLink label="打开 API Keys 页面" url={helpLinks.globalKey}/>
                                 </div>
                             </form>
                         </section>

@@ -7,8 +7,8 @@
 ## 当前能力
 
 - 页面分为基础配置、Tunnel 管理、域名映射、日志四个工作区。
-- 手动配置 Account ID、Zone ID、根域名、认证方式和运行参数。
-- API Token 或 Global API Key 按自用场景明文保存到本地配置文件，界面可查看和复制。
+- 手动或自动配置 Account ID、Zone ID、根域名和运行参数。
+- Global API Key 按自用场景明文保存到本地配置文件，界面可查看和复制。
 - 创建、刷新、删除 Cloudflare Tunnel，并可将指定 Tunnel 设为当前管理对象；本地连接运行中切换 Tunnel 时会自动重启连接。
 - 自动从 Cloudflare 获取当前 Tunnel 的 Tunnel Token；界面只读展示，不提供手工修改入口。
 - 管理当前 Tunnel 的 `hostname -> http(s)://host:port` 映射，新增、编辑、删除后自动同步 Cloudflare Tunnel ingress 配置和 CNAME DNS 记录。
@@ -33,12 +33,7 @@ Tunnel 管理：
 
 ## Cloudflare 认证
 
-建议创建只限制到目标 Account 和 Zone 的 API Token：
-
-- Account 权限：Cloudflare Tunnel Read + Write/Edit。
-- Zone 权限：Zone Read、DNS Read + Write/Edit。
-
-应用也支持 Global API Key。使用 Global API Key 时必须同时填写 Cloudflare 账号邮箱，应用会改用 `X-Auth-Email` 和 `X-Auth-Key` 请求头；如果把 Global API Key 当作 API Token 使用，会得到 `9109 Invalid access token`。
+应用统一使用 Global API Key 管理 Cloudflare 资源。填写 Cloudflare 账号邮箱和 Global API Key 后，应用会使用 `X-Auth-Email` 和 `X-Auth-Key` 请求头，并自动获取可访问的 Account、Zone 和 Tunnel；如果候选项只有一个会自动填入，如果有多个会在界面提供下拉选择。
 
 应用会把认证凭据明文写入配置文件，并缓存当前 Tunnel 的运行 token。macOS 通常是：
 
@@ -52,7 +47,7 @@ Windows 通常是：
 C:\Users\<用户名>\AppData\Roaming\CloudflareTunnelDesktop\config.json
 ```
 
-截图里的“用户 API 令牌”是推荐使用的 API Token；下面“API 密钥”里的 Global API Key 也能用，但权限更大，使用时请选择认证方式为 `Global API Key` 并填写账号邮箱。
+请使用 Cloudflare 个人资料页面中“API 密钥”里的 Global API Key，并同时填写账号邮箱。
 
 ## 开发
 
@@ -101,7 +96,7 @@ open build/bin/cloudflare-tunnel-desktop.app
 - macOS 或 Windows 电脑。
 - `cloudflared` CLI，确保 `cloudflared --version` 可执行。也可以在界面中点击安装：macOS 需要 Homebrew；Windows 优先使用 Cloudflare [官方下载文档](https://developers.cloudflare.com/tunnel/downloads/)中的 `winget install --id Cloudflare.cloudflared`，如果没有 `winget` 会尝试 `scoop install cloudflared` 或 `choco install cloudflared -y`。
 - 构建好的 `cloudflare-tunnel-desktop` 二进制、`.app`、`.dmg` 或 `.exe`。
-- Cloudflare API Token，或 Global API Key + Cloudflare 账号邮箱。API Token 权限至少包含目标账号的 Tunnel Read/Write 和目标 Zone 的 Zone Read、DNS Read/Write。
+- Global API Key + Cloudflare 账号邮箱。
 
 如果要在新电脑上从源码开发或重新构建，还需要：
 
@@ -166,7 +161,7 @@ Windows exe 的真实运行校验需要在 Windows 实机、虚拟机或 GitHub 
 最新已验证发布版本是：
 
 ```text
-https://github.com/18230/cloudflare-tunnel-desktop/releases/tag/v1.0.2
+https://github.com/18230/cloudflare-tunnel-desktop/releases/tag/v1.0.3
 ```
 
 如果 macOS codesign 报 `resource fork, Finder information, or similar detritus not allowed`，清理构建产物扩展属性后再验签：

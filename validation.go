@@ -45,15 +45,9 @@ func NormalizeSettings(input SettingsInput) (SettingsInput, error) {
 	return input, nil
 }
 
-// NormalizeAuthType 清理并校验 Cloudflare API 认证方式。
+// NormalizeAuthType 统一认证方式；当前只支持 Global API Key。
 func NormalizeAuthType(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	switch value {
-	case authTypeGlobalKey:
-		return authTypeGlobalKey
-	default:
-		return authTypeAPIToken
-	}
+	return authTypeGlobalKey
 }
 
 // NormalizeRoute 清理并校验路由配置，保证生成的服务地址安全可控。

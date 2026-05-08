@@ -55,6 +55,46 @@ func TestBindTunnelPersistsReturnedTunnelToken(t *testing.T) {
 	}
 }
 
+// TestApplyDiscoveredZoneUsesSingleCandidate 验证自动发现只有一个 Zone 时会回填账号和根域名。
+func TestApplyDiscoveredZoneUsesSingleCandidate(t *testing.T) {
+	config, messages := applyDiscoveredZone(AppConfig{}, []CloudflareZone{{
+		ID:   "abcdef0123456789abcdef0123456789",
+		Name: "example.com",
+		Account: CloudflareAccount{
+			ID:   "0123456789abcdef0123456789abcdef",
+			Name: "Personal",
+		},
+	}}, []CloudflareAccount{{
+		ID:   "0123456789abcdef0123456789abcdef",
+		Name: "Personal",
+	}}, nil)
+	if config.AccountID != "0123456789abcdef0123456789abcdef" || config.ZoneID != "abcdef0123456789abcdef0123456789" || config.RootDomain != "example.com" {
+		t.Fatalf("unexpected discovered config: %#v", config)
+	}
+	if len(messages) == 0 {
+		t.Fatal("expected discovery messages")
+	}
+}
+
+// TestApplyDiscoveredTunnelClearsForeignTunnel 验证切换账号后不会保留不属于该账号的 Tunnel。
+func TestApplyDiscoveredTunnelClearsForeignTunnel(t *testing.T) {
+	config, messages := applyDiscoveredTunnel(nil, nil, AppConfig{
+		AccountID:   "0123456789abcdef0123456789abcdef",
+		TunnelID:    "11111111-2222-3333-4444-555555555555",
+		TunnelName:  "old",
+		TunnelToken: "old-token",
+	}, []CloudflareTunnel{{
+		ID:   "22222222-3333-4444-5555-666666666666",
+		Name: "new",
+	}}, nil)
+	if config.TunnelID != "" || config.TunnelName != "" || config.TunnelToken != "" {
+		t.Fatalf("foreign tunnel should be cleared: %#v", config)
+	}
+	if len(messages) == 0 {
+		t.Fatal("expected discovery messages")
+	}
+}
+
 // newTestAppWithConfig 创建带临时配置文件的 App，避免测试读写真实用户配置。
 func newTestAppWithConfig(t *testing.T, config AppConfig) *App {
 	t.Helper()
@@ -77,7 +117,7 @@ func newTestAppWithConfig(t *testing.T, config AppConfig) *App {
 		config:      config,
 		authType:    NormalizeAuthType(config.AuthType),
 		authEmail:   config.AuthEmail,
-		apiToken:    config.APIToken,
+		globalKey:   config.APIToken,
 		tunnelToken: config.TunnelToken,
 	}
 }
